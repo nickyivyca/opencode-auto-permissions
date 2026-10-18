@@ -233,6 +233,10 @@ function assistantText(value: unknown): string {
 function isStructuredOutputError(error: unknown): boolean {
   if (!isRecord(error)) return false
   if (error.name === "StructuredOutputError" || error._tag === "StructuredOutputError") return true
+  if (
+    typeof error.message === "string" &&
+    /thinking mode does not support this tool_choice|tool_choice ['"]?required['"]? is incompatible with thinking/i.test(error.message)
+  ) return true
   return isStructuredOutputError(error.error) || isStructuredOutputError(error.data) || isStructuredOutputError(error.cause)
 }
 
