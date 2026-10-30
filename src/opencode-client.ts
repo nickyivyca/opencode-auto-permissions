@@ -1,4 +1,4 @@
-import type { ReviewModel, ReviewerClient } from "./types.ts"
+import type { ReviewModel, ReviewTokens, ReviewerClient } from "./types.ts"
 import { DECISION_SCHEMA, REVIEWER_AGENT_ID } from "./agent.ts"
 import { mkdir } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -38,6 +38,7 @@ export class OpenCodeClientAdapter implements ReviewerClient {
     parentSessionID: string
     location?: { directory?: string; workspaceID?: string }
     signal: AbortSignal
+    onTokens?(tokens: ReviewTokens): void
   }): Promise<unknown> {
     if (typeof this.client.permission?.request?.list === "function") return this.generateCurrent(input)
     const stable = typeof this.client.postSessionIdPermissionsPermissionId === "function"
@@ -102,7 +103,9 @@ export class OpenCodeClientAdapter implements ReviewerClient {
           }
       try {
         const result = unwrapData(await session.prompt(promptInput, { signal: input.signal }))
-        return assistantStructured(result)
+        const structured = assistantStructured(result)
+        reportTokens(result, input.onTokens)
+        return structured
       } catch (error) {
         if (!isStructuredOutputError(error)) throw error
         const fallbackBody = {
@@ -117,7 +120,9 @@ export class OpenCodeClientAdapter implements ReviewerClient {
           ? { path: { id: sessionID }, query: location, body: fallbackBody }
           : { sessionID, ...location, ...fallbackBody }
         const result = unwrapData(await session.prompt(fallbackInput, { signal: input.signal }))
-        return JSON.parse(assistantText(result))
+        const parsed = JSON.parse(assistantText(result))
+        reportTokens(result, input.onTokens)
+        return parsed
       }
     } finally {
       input.signal.removeEventListener("abort", abortRemote)
@@ -228,6 +233,16 @@ function assistantText(value: unknown): string {
     .trim()
   if (!text) throw new Error("OpenCode reviewer returned no text output")
   return text
+}
+
+function reportTokens(value: unknown, onTokens: ((tokens: ReviewTokens) => void) | undefined): void {
+  if (!onTokens || !isRecord(value) || !isRecord(value.info)) return
+  const tokens = value.info.tokens
+  if (!isRecord(tokens) || !isRecord(tokens.cache)) return
+  const { input, output } = tokens
+  const { read, write } = tokens.cache
+  if (![input, output, read, write].every((count) => typeof count === "number")) return
+  onTokens({ input, output, cache: { read, write } })
 }
 
 function isStructuredOutputError(error: unknown): boolean {

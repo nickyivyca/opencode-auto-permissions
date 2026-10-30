@@ -302,6 +302,61 @@ describe("OpenCodeClientAdapter", () => {
     expect(prompts[1]).toMatchObject({ format: { type: "text" } })
   })
 
+  test.each(["structured", "text fallback"])("reports the reviewer turn's token usage from %s output", async (path) => {
+    const tokens = { total: 1_250, input: 200, output: 40, reasoning: 10, cache: { read: 1_000, write: 0 } }
+    const decision = { decision: "allow", reasonCode: "authorized", reason: "Requested by the user." }
+    let prompts = 0
+    const client = new OpenCodeClientAdapter({
+      session: {
+        create: async () => ({ data: { id: "ses_review" } }),
+        prompt: async () => {
+          prompts++
+          if (path === "structured") return { data: { info: { role: "assistant", structured: decision, tokens }, parts: [] } }
+          if (prompts === 1) {
+            return { data: { info: { error: { name: "StructuredOutputError", data: { message: "No structured output" } } }, parts: [] } }
+          }
+          return { data: { info: { role: "assistant", tokens }, parts: [{ type: "text", text: JSON.stringify(decision) }] } }
+        },
+        delete: async () => ({ data: true }),
+      },
+    })
+    const reported: unknown[] = []
+
+    await expect(client.generate({
+      prompt: "review",
+      model: { providerID: "deepseek", id: "deepseek-flash" },
+      parentSessionID: "ses_parent",
+      signal: new AbortController().signal,
+      onTokens: (usage) => reported.push(usage),
+    })).resolves.toEqual(decision)
+    expect(reported).toEqual([{ input: 200, output: 40, cache: { read: 1_000, write: 0 } }])
+  })
+
+  test("reports no token usage when the provider omits it", async () => {
+    const client = new OpenCodeClientAdapter({
+      session: {
+        create: async () => ({ data: { id: "ses_review" } }),
+        prompt: async () => ({
+          data: {
+            info: { role: "assistant", structured: { decision: "allow", reasonCode: "ok", reason: "Fine." }, tokens: { input: 1 } },
+            parts: [],
+          },
+        }),
+        delete: async () => ({ data: true }),
+      },
+    })
+    const reported: unknown[] = []
+
+    await client.generate({
+      prompt: "review",
+      model: { providerID: "deepseek", id: "deepseek-flash" },
+      parentSessionID: "ses_parent",
+      signal: new AbortController().signal,
+      onTokens: (usage) => reported.push(usage),
+    })
+    expect(reported).toEqual([])
+  })
+
   test("creates the stable reviewer session with a permission ruleset that allows structured output", async () => {
     const creates: any[] = []
     const client = new OpenCodeClientAdapter({

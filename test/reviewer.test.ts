@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test"
+import { mkdtemp, readFile, rm } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { installReviewer } from "../src/reviewer.ts"
 import type { PermissionRequest, ReviewerClient, RuntimeContext } from "../src/types.ts"
 
@@ -597,5 +600,35 @@ describe("installReviewer", () => {
       { sessionID: "ses_root", requestID: "per_1", reply: "once", protocol: "v2" },
     ])
     dispose()
+  })
+
+  test("records the reviewer's token usage on the model decision", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "auto-permissions-reviewer-"))
+    const path = join(directory, "decisions.jsonl")
+    const app = harness({ model: "deepseek/deepseek-flash", debug: path })
+    app.client.generate = async ({ onTokens }) => {
+      onTokens?.({ input: 300, output: 20, cache: { read: 9_000, write: 0 } })
+      return { decision: "allow", reasonCode: "requested_action", reason: "The user requested this action." }
+    }
+    app.requests.push(request("git push origin feature"))
+    const dispose = installReviewer(app.context, { client: app.client })
+    try {
+      app.emit("permission.v2.asked", app.requests[0])
+      let decision: Record<string, unknown> | undefined
+      for (let attempt = 0; attempt < 50 && !decision; attempt++) {
+        await settle()
+        const records = (await readFile(path, "utf8").catch(() => ""))
+          .split("\n").filter(Boolean).map((line) => JSON.parse(line))
+        decision = records.find((record) => record.event === "model_decision")
+      }
+      expect(decision).toMatchObject({
+        modelID: "deepseek-flash",
+        decision: "allow",
+        tokens: { input: 300, output: 20, cache: { read: 9_000, write: 0 } },
+      })
+    } finally {
+      dispose()
+      await rm(directory, { recursive: true, force: true })
+    }
   })
 })

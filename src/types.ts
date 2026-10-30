@@ -73,6 +73,14 @@ export interface RuntimeContext {
   resumeAfterDenial?(sessionID: string, reason: string): void
 }
 
+// Token usage of the reviewer turn that produced a decision, as reported by
+// the provider. Cache counts show whether the stable prompt prefix was reused.
+export interface ReviewTokens {
+  input: number
+  output: number
+  cache: { read: number; write: number }
+}
+
 export interface ReviewerClient {
   prewarm?(): Promise<void>
   generate(input: {
@@ -81,6 +89,7 @@ export interface ReviewerClient {
     parentSessionID: string
     location?: { directory?: string; workspaceID?: string }
     signal: AbortSignal
+    onTokens?(tokens: ReviewTokens): void
   }): Promise<unknown>
   reply(input: {
     sessionID: string

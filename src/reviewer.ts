@@ -13,6 +13,7 @@ import type {
   PermissionProtocol,
   PermissionRequest,
   ReviewModel,
+  ReviewTokens,
   ReviewerClient,
   RuntimeContext,
 } from "./types.ts"
@@ -370,9 +371,13 @@ async function modelDecision(
       ...diagnostic, timestamp: new Date().toISOString(), event: "model_attempt",
     })
     try {
-      const decision = await singleModelDecision(client, config, input, parentSignal, model)
+      let tokens: ReviewTokens | undefined
+      const decision = await singleModelDecision(client, config, input, parentSignal, model, (reported) => {
+        tokens = reported
+      })
       writeDiagnostic(config.diagnosticsPath, {
         ...diagnostic, timestamp: new Date().toISOString(), event: "model_decision", decision: decision.kind,
+        ...(tokens ? { tokens } : {}),
       })
       return decision
     } catch (error) {
@@ -401,6 +406,7 @@ async function singleModelDecision(
   input: Awaited<ReturnType<typeof collectReviewInput>>,
   parentSignal: AbortSignal,
   model: ReviewModel,
+  onTokens: (tokens: ReviewTokens) => void,
 ): Promise<Decision> {
   const timeout = new AbortController()
   const timer = setTimeout(() => timeout.abort("review timed out"), config.timeoutMs)
@@ -422,6 +428,7 @@ async function singleModelDecision(
         parentSessionID: input.context.rootSessionID,
         ...(input.context.directory ? { location: { directory: input.context.directory } } : {}),
         signal: timeout.signal,
+        onTokens,
       })])
     } catch (error) {
       if (timeout.signal.aborted && !parentSignal.aborted) throw new Error("Permission review timed out")

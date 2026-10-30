@@ -1,7 +1,7 @@
 import { mkdir, open, readFile, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
-import type { Decision, PermissionRequest } from "./types.ts"
+import type { Decision, PermissionRequest, ReviewTokens } from "./types.ts"
 
 const MAX_RECORDS = 100
 const queues = new Map<string, Promise<void>>()
@@ -45,6 +45,7 @@ export interface DiagnosticRecord {
   modelID?: string
   variant?: string
   attempt?: number
+  tokens?: ReviewTokens
   clientCapabilities?: string[]
 }
 
