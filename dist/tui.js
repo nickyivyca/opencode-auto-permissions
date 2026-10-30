@@ -588,9 +588,7 @@ class OpenCodeClientAdapter {
           format: { type: "text" },
           parts: [{
             type: "text",
-            text: `${input.prompt}
-
-Structured output was unavailable. Return only one JSON object without Markdown fences. It must have exactly these three keys:
+            text: `Structured output was unavailable. Return only one JSON object without Markdown fences. It must have exactly these three keys:
 - "decision": one of "allow", "allow_session", or "deny"
 - "reasonCode": lower_snake_case, starting with a letter, at most 64 characters
 - "reason": one non-empty sentence, at most 240 characters
