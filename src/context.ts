@@ -1,4 +1,11 @@
-import type { PermissionRequest, ReviewInput, ReviewModel, RuntimeContext } from "./types.ts"
+import type {
+  MessageSource,
+  PermissionRequest,
+  ReviewInput,
+  ReviewMessage,
+  ReviewModel,
+  RuntimeContext,
+} from "./types.ts"
 
 const MAX_MESSAGE_CHARS = 4_000
 export const AUTO_PERMISSIONS_MESSAGE_PREFIX = "[Auto Permissions] The requested action was blocked:"
@@ -70,12 +77,10 @@ export async function collectReviewInput(
   const sessionMessages = request.sessionID === rootSessionID
     ? []
     : context.data.session.message.list(request.sessionID)
-  const userMessages = [...rootMessages, ...sessionMessages]
-    .flatMap((message) => {
-      const text = userText(message)
-      return text === undefined ? [] : [text.slice(0, MAX_MESSAGE_CHARS)]
-    })
-    .slice(-userMessageCount)
+  const userMessages = [
+    ...labelMessages(rootMessages, "human"),
+    ...labelMessages(sessionMessages, "subagent_prompt"),
+  ].slice(-userMessageCount)
   const currentDirectory = directory(context)
   const model = latestUserModel(sessionMessages) ?? latestUserModel(rootMessages)
 
@@ -95,6 +100,13 @@ export async function collectReviewInput(
       ...(model ? { model } : {}),
     },
   }
+}
+
+function labelMessages(messages: unknown[], source: MessageSource): ReviewMessage[] {
+  return messages.flatMap((message) => {
+    const text = userText(message)
+    return text === undefined ? [] : [{ source, text: text.slice(0, MAX_MESSAGE_CHARS) }]
+  })
 }
 
 function latestUserModel(messages: unknown[]): ReviewModel | undefined {

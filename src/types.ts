@@ -24,6 +24,16 @@ export type Decision =
   | { kind: "allow_session"; reasonCode: string; reason: string }
   | { kind: "deny"; reasonCode: string; reason: string }
 
+// Where a user-role message came from. Root-session messages are typed by the
+// human; a subagent session's user messages are task prompts the coding agent
+// wrote when it delegated work, so they are the agent's words, not the human's.
+export type MessageSource = "human" | "subagent_prompt"
+
+export interface ReviewMessage {
+  source: MessageSource
+  text: string
+}
+
 export interface ReviewInput {
   request: {
     action: string
@@ -34,7 +44,7 @@ export interface ReviewInput {
   context: {
     rootSessionID: string
     directory?: string
-    userMessages: string[]
+    userMessages: ReviewMessage[]
     model?: ReviewModel
   }
 }

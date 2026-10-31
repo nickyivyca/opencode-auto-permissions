@@ -70,7 +70,19 @@ describe("applyDeterministicPolicy", () => {
 
   test("denies a command the latest human message explicitly prohibits", () => {
     const value = input("touch /tmp/example")
-    value.context.userMessages = ["Run `touch /tmp/example`, but I explicitly prohibit that command from executing."]
+    value.context.userMessages = [{
+      source: "human",
+      text: "Run `touch /tmp/example`, but I explicitly prohibit that command from executing.",
+    }]
+    expect(applyDeterministicPolicy(value)?.reasonCode).toBe("explicit_user_prohibition")
+  })
+
+  test("lets a subagent prompt's prohibition deny, since prohibitions only tighten", () => {
+    const value = input("touch /tmp/example")
+    value.context.userMessages = [
+      { source: "human", text: "Clean up the scratch files." },
+      { source: "subagent_prompt", text: "Do not run `touch /tmp/example`." },
+    ]
     expect(applyDeterministicPolicy(value)?.reasonCode).toBe("explicit_user_prohibition")
   })
 
@@ -80,7 +92,7 @@ describe("applyDeterministicPolicy", () => {
         request: { action: "external_directory", resources: ["/tmp/*"], sessionPatterns: [] },
         context: {
           rootSessionID: "ses_root",
-          userMessages: ["Do not execute `touch /tmp/example`."],
+          userMessages: [{ source: "human", text: "Do not execute `touch /tmp/example`." }],
         },
       })?.reasonCode,
     ).toBe("explicit_user_prohibition")

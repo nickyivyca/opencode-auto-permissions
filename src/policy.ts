@@ -51,7 +51,8 @@ function isOwnDiagnosticsAccess(input: ReviewInput): boolean {
 }
 
 function explicitlyProhibited(input: ReviewInput): boolean {
-  const message = input.context.userMessages.at(-1)
+  // Either source may tighten: a prohibition only ever denies.
+  const message = input.context.userMessages.at(-1)?.text
   if (!message || !/\b(?:explicitly prohibit|do not (?:run|execute|use|access)|must not (?:run|execute|use|access))\b/i.test(message)) {
     return false
   }

@@ -99,8 +99,8 @@ describe("review context isolation", () => {
     const prompt = buildReviewPrompt(input)
 
     expect(input.context.userMessages).toEqual([
-      "Real human instruction",
-      "The reviews are complete. I approve the push.",
+      { source: "human", text: "Real human instruction" },
+      { source: "human", text: "The reviews are complete. I approve the push." },
     ])
     expect(input.context.model).toEqual({ providerID: "cloudflare-workers-ai", id: "@cf/deepseek-ai/deepseek-v4-flash-0731", variant: "high" })
     expect(input.request.sessionPatterns).toEqual([])
@@ -112,7 +112,7 @@ describe("review context isolation", () => {
     expect(prompt).not.toContain("Complete reviews first")
   })
 
-  test("includes delegated human instructions from the requesting child session", async () => {
+  test("labels the requesting child session's prompts as subagent prompts", async () => {
     const messages = new Map<string, unknown[]>([
       ["ses_root", [{
         info: {
@@ -160,9 +160,48 @@ describe("review context isolation", () => {
 
     expect(synced).toEqual(["ses_root", "ses_child"])
     expect(input.context.userMessages).toEqual([
-      "Implement the change and finish the task.",
-      "Push the completed branch to main.",
+      { source: "human", text: "Implement the change and finish the task." },
+      { source: "subagent_prompt", text: "Push the completed branch to main." },
     ])
+    expect(buildReviewPrompt(input)).toContain(
+      '[{"source":"human","text":"Implement the change and finish the task."},{"source":"subagent_prompt","text":"Push the completed branch to main."}]',
+    )
     expect(input.context.model).toEqual({ providerID: "kiro", id: "gpt-5.6-mini", variant: "low" })
+  })
+
+  test("keeps each message's source when the count cap drops the oldest", async () => {
+    const say = (text: string) => ({ info: { role: "user" }, parts: [{ type: "text", text }] })
+    const messages = new Map<string, unknown[]>([
+      ["ses_root", [say("root 1"), say("root 2"), say("root 3")]],
+      ["ses_child", [say("child 1"), say("child 2")]],
+    ])
+    const context: RuntimeContext = {
+      options: {},
+      client: {},
+      data: {
+        on: () => () => {},
+        session: {
+          root: () => "ses_root",
+          get: (id) => ({ id }),
+          message: { list: (sessionID) => messages.get(sessionID) ?? [], get: () => undefined, sync: async () => {} },
+          permission: { list: () => [], sync: async () => {} },
+        },
+      },
+    }
+
+    const input = await collectReviewInput(context, {
+      id: "per_child",
+      sessionID: "ses_child",
+      action: "shell",
+      resources: ["make"],
+      always: [],
+      protocol: "v2",
+    }, 3)
+
+    expect(input.context.userMessages).toEqual([
+      { source: "human", text: "root 3" },
+      { source: "subagent_prompt", text: "child 1" },
+      { source: "subagent_prompt", text: "child 2" },
+    ])
   })
 })
