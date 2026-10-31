@@ -6,12 +6,19 @@ import {
   normalizeAskedEvent,
   normalizeRepliedEvent,
 } from "./context.ts"
+import {
+  discoverInstructionPaths,
+  explicitInstructionPaths,
+  readInstructionFiles,
+  renderInstructions,
+} from "./instructions.ts"
 import { applyDeterministicPolicy } from "./policy.ts"
 import { buildReviewPrompt } from "./prompt.ts"
 import type {
   Decision,
   PermissionProtocol,
   PermissionRequest,
+  ReviewInput,
   ReviewModel,
   ReviewTokens,
   ReviewerClient,
@@ -115,7 +122,12 @@ async function reviewAndReply(
   sessionApprovals: Set<string>,
   sharedReviewSignal: AbortSignal,
 ): Promise<void> {
-  const input = await collectReviewInput(context, request, config.userMessageCount)
+  const input = await withInstructions(
+    context,
+    config,
+    request,
+    await collectReviewInput(context, request, config.userMessageCount),
+  )
   if (parentSignal.aborted) return
 
   const policyDecision = applyDeterministicPolicy(input)
@@ -337,6 +349,51 @@ function cancelReview(config: Config, inFlight: Map<string, AbortController>, re
   controller.abort("permission resolved")
 }
 
+/**
+ * Adds the instruction files to the review input. Files are read on every
+ * review, so an edit takes effect on the next one; an unchanged file still
+ * yields an identical prompt prefix for provider caching.
+ */
+async function withInstructions(
+  context: RuntimeContext,
+  config: Config,
+  request: PermissionRequest,
+  input: ReviewInput,
+): Promise<ReviewInput> {
+  if (config.instructions === false) return input
+  const directory = input.context.directory
+  const paths = config.instructions === true
+    ? directory
+      ? await discoverInstructionPaths({
+          directory,
+          ...(context.location?.worktree ? { worktree: context.location.worktree } : {}),
+        })
+      : []
+    : explicitInstructionPaths(config.instructions, directory)
+  // Diagnostics never record paths, so a missing file is identified by its
+  // position in the configured list.
+  const files = await readInstructionFiles(paths, config.instructions === true ? undefined : (path) => {
+    writeDiagnostic(config.diagnosticsPath, {
+      timestamp: new Date().toISOString(),
+      event: "instructions_missing",
+      requestID: request.id,
+      instructionIndex: paths.indexOf(path),
+    })
+  })
+  if (files.length === 0) return input
+  const rendered = renderInstructions(files, config.instructionsMaxChars)
+  if (rendered.truncated) {
+    writeDiagnostic(config.diagnosticsPath, {
+      timestamp: new Date().toISOString(),
+      event: "instructions_truncated",
+      requestID: request.id,
+      instructionChars: rendered.chars,
+      maxChars: config.instructionsMaxChars,
+    })
+  }
+  return { ...input, context: { ...input.context, instructions: rendered.text } }
+}
+
 async function modelDecision(
   context: RuntimeContext,
   client: ReviewerClient,
@@ -366,6 +423,7 @@ async function modelDecision(
       modelID: model.id,
       ...(model.variant ? { variant: model.variant } : {}),
       attempt: index + 1,
+      ...(input.context.instructions ? { instructionChars: input.context.instructions.length } : {}),
     }
     writeDiagnostic(config.diagnosticsPath, {
       ...diagnostic, timestamp: new Date().toISOString(), event: "model_attempt",

@@ -20,6 +20,8 @@ export interface DiagnosticRecord {
     | "failure"
     | "resumed"
     | "resume_failed"
+    | "instructions_truncated"
+    | "instructions_missing"
   requestID?: string
   sessionID?: string
   protocol?: PermissionRequest["protocol"]
@@ -46,6 +48,9 @@ export interface DiagnosticRecord {
   variant?: string
   attempt?: number
   tokens?: ReviewTokens
+  instructionIndex?: number
+  instructionChars?: number
+  maxChars?: number
   clientCapabilities?: string[]
 }
 

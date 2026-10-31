@@ -46,6 +46,9 @@ export interface ReviewInput {
     directory?: string
     userMessages: ReviewMessage[]
     model?: ReviewModel
+    // Rendered instruction files, already capped. Absent when the option is off
+    // or no file was found.
+    instructions?: string
   }
 }
 
@@ -73,7 +76,7 @@ export interface RuntimeContext {
       default(): { directory?: string; workspaceID?: string }
     }
   }
-  location?: { directory?: string; workspaceID?: string }
+  location?: { directory?: string; workspaceID?: string; worktree?: string }
   showToast?(input: {
     title?: string
     message: string

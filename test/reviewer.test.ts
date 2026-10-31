@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { mkdtemp, readFile, rm } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { installReviewer } from "../src/reviewer.ts"
@@ -628,6 +628,89 @@ describe("installReviewer", () => {
       })
     } finally {
       dispose()
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
+  test("reads instruction files on every review and logs truncation and missing files", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "auto-permissions-reviewer-"))
+    const rules = join(directory, "REVIEW.md")
+    const log = join(directory, "decisions.jsonl")
+    await writeFile(rules, "Rule version one.")
+    const app = harness({
+      model: "deepseek/deepseek-flash",
+      debug: log,
+      instructions: [rules, join(directory, "missing.md")],
+      instructionsMaxChars: 1_000,
+    })
+    const prompts: string[] = []
+    app.client.generate = async ({ prompt }) => {
+      prompts.push(prompt)
+      return { decision: "allow", reasonCode: "requested_action", reason: "The user requested this action." }
+    }
+    const dispose = installReviewer(app.context, { client: app.client })
+    const review = async (id: string) => {
+      app.requests.push(request("git push origin feature", "v2", id))
+      app.emit("permission.v2.asked", app.requests.at(-1))
+      for (let attempt = 0; attempt < 50 && !app.replies.some((reply) => reply.requestID === id); attempt++) await settle()
+    }
+    const records = async () => (await readFile(log, "utf8").catch(() => ""))
+      .split("\n").filter(Boolean).map((line) => JSON.parse(line))
+    try {
+      await review("per_1")
+      await writeFile(rules, `Rule version two.\n${"x".repeat(2_000)}\nNever push to main.`)
+      await review("per_2")
+      expect(prompts).toHaveLength(2)
+      expect(prompts[0]).toContain("Rule version one.")
+      expect(prompts[1]).toContain("Rule version two.")
+      expect(prompts[1]).toContain("Never push to main.")
+      expect(prompts[1]).toContain("characters omitted by Auto Permissions")
+      let logged: Record<string, unknown>[] = []
+      for (let attempt = 0; attempt < 50; attempt++) {
+        logged = await records()
+        if (logged.some((record) => record.event === "instructions_truncated")) break
+        await settle()
+      }
+      expect(logged.filter((record) => record.event === "instructions_missing").map((record) => record.instructionIndex))
+        .toEqual([1, 1])
+      expect(JSON.stringify(logged)).not.toContain(directory)
+      expect(logged.find((record) => record.event === "instructions_truncated")).toMatchObject({ requestID: "per_2", maxChars: 1_000 })
+      expect(logged.filter((record) => record.event === "model_decision").map((record) => typeof record.instructionChars))
+        .toEqual(["number", "number"])
+    } finally {
+      dispose()
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
+  test("discovers AGENTS.md from the session directory up to the worktree", async () => {
+    const directory = await realpath(await mkdtemp(join(tmpdir(), "auto-permissions-reviewer-")))
+    const saved = { configDir: process.env.OPENCODE_CONFIG_DIR, testHome: process.env.OPENCODE_TEST_HOME }
+    process.env.OPENCODE_CONFIG_DIR = join(directory, "config")
+    process.env.OPENCODE_TEST_HOME = join(directory, "home")
+    await mkdir(join(directory, "repo", "sub"), { recursive: true })
+    await writeFile(join(directory, "AGENTS.md"), "Outside the worktree.")
+    await writeFile(join(directory, "repo", "AGENTS.md"), "Never push to main.")
+    const app = harness({ model: "deepseek/deepseek-flash", instructions: true })
+    app.context.location = { directory: join(directory, "repo", "sub"), worktree: join(directory, "repo") }
+    const prompts: string[] = []
+    app.client.generate = async ({ prompt }) => {
+      prompts.push(prompt)
+      return { decision: "deny", reasonCode: "instruction_rule", reason: "AGENTS.md forbids pushing to main; push a feature branch instead." }
+    }
+    const dispose = installReviewer(app.context, { client: app.client })
+    try {
+      app.requests.push(request("git push origin main"))
+      app.emit("permission.v2.asked", app.requests[0])
+      for (let attempt = 0; attempt < 50 && prompts.length === 0; attempt++) await settle()
+      expect(prompts[0]).toContain(`<instruction_file path="${join(directory, "repo", "AGENTS.md")}">\nNever push to main.`)
+      expect(prompts[0]).not.toContain("Outside the worktree.")
+    } finally {
+      dispose()
+      if (saved.configDir === undefined) delete process.env.OPENCODE_CONFIG_DIR
+      else process.env.OPENCODE_CONFIG_DIR = saved.configDir
+      if (saved.testHome === undefined) delete process.env.OPENCODE_TEST_HOME
+      else process.env.OPENCODE_TEST_HOME = saved.testHome
       await rm(directory, { recursive: true, force: true })
     }
   })

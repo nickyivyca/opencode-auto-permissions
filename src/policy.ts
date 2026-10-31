@@ -25,7 +25,9 @@ export function applyDeterministicPolicy(input: ReviewInput): Decision | null {
     )
   }
 
-  if (!SHELL_COMPOSITION.test(command) && isRoutineLocalCommand(command)) {
+  // An instruction file may forbid even a routine command, so with
+  // instructions loaded the model decides.
+  if (!input.context.instructions && !SHELL_COMPOSITION.test(command) && isRoutineLocalCommand(command)) {
     return {
       kind: "allow",
       reasonCode: "routine_local_command",

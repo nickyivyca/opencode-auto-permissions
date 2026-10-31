@@ -3,6 +3,7 @@ import { defaultDiagnosticsPath } from "./diagnostics.ts"
 
 const DEFAULT_TIMEOUT_MS = 30_000
 const DEFAULT_USER_MESSAGE_COUNT = 8
+const DEFAULT_INSTRUCTIONS_MAX_CHARS = 64_000
 
 export interface Config {
   model: ReviewModel | undefined
@@ -14,6 +15,9 @@ export interface Config {
   sessionApprovals: boolean
   runtime: "auto" | "stable" | "v2"
   diagnosticsPath: string | undefined
+  // true discovers files the way OpenCode does; a list names them explicitly.
+  instructions: boolean | string[]
+  instructionsMaxChars: number
 }
 
 export function parseConfig(options: Readonly<Record<string, unknown>>): Config {
@@ -37,6 +41,14 @@ export function parseConfig(options: Readonly<Record<string, unknown>>): Config 
     sessionApprovals: options.sessionApprovals !== false,
     runtime: parseRuntime(options.runtime),
     diagnosticsPath: parseDiagnosticsPath(options.debug),
+    instructions: parseInstructions(options.instructions),
+    instructionsMaxChars: boundedInteger(
+      options.instructionsMaxChars,
+      DEFAULT_INSTRUCTIONS_MAX_CHARS,
+      1_000,
+      500_000,
+      "instructionsMaxChars",
+    ),
   }
 }
 
@@ -66,6 +78,15 @@ function parseDiagnosticsPath(value: unknown): string | undefined {
   if (value === true) return defaultDiagnosticsPath()
   if (typeof value === "string" && value.trim()) return value.trim()
   throw new Error('Auto Permissions debug must be true, false, or a file path')
+}
+
+function parseInstructions(value: unknown): boolean | string[] {
+  if (value === undefined || value === false) return false
+  if (value === true) return true
+  if (Array.isArray(value) && value.length > 0 && value.every((item) => typeof item === "string" && item.trim())) {
+    return value.map((item: string) => item.trim())
+  }
+  throw new Error("Auto Permissions instructions must be true, false, or a non-empty list of file paths")
 }
 
 function parseRuntime(value: unknown): Config["runtime"] {

@@ -97,4 +97,13 @@ describe("applyDeterministicPolicy", () => {
       })?.reasonCode,
     ).toBe("explicit_user_prohibition")
   })
+
+  test("leaves routine commands to the model when instruction files are loaded", () => {
+    const value = input("cargo build")
+    expect(applyDeterministicPolicy(value)?.kind).toBe("allow")
+    value.context.instructions = '<instruction_file path="/repo/AGENTS.md">\nUse make, never cargo build.\n</instruction_file>'
+    expect(applyDeterministicPolicy(value)).toBeNull()
+    expect(applyDeterministicPolicy({ ...value, request: { ...value.request, resources: ["rm -rf /"], toolInput: { command: "rm -rf /" } } })?.kind)
+      .toBe("deny")
+  })
 })

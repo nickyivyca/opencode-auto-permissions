@@ -13,7 +13,23 @@ describe("parseConfig", () => {
       sessionApprovals: true,
       runtime: "auto",
       diagnosticsPath: undefined,
+      instructions: false,
+      instructionsMaxChars: 64_000,
     })
+  })
+
+  test("parses the instructions option", () => {
+    expect(parseConfig({ model: "a/b", instructions: true }).instructions).toBeTrue()
+    expect(parseConfig({ model: "a/b", instructions: false }).instructions).toBeFalse()
+    expect(parseConfig({ model: "a/b", instructions: [" AGENTS.md ", "~/rules.md"] }).instructions)
+      .toEqual(["AGENTS.md", "~/rules.md"])
+    for (const instructions of ["AGENTS.md", [], [""], [1], null]) {
+      expect(() => parseConfig({ model: "a/b", instructions })).toThrow(/instructions/)
+    }
+    expect(parseConfig({ model: "a/b", instructionsMaxChars: 32_000 }).instructionsMaxChars).toBe(32_000)
+    for (const instructionsMaxChars of [999, 500_001, 1.5, "64000"]) {
+      expect(() => parseConfig({ model: "a/b", instructionsMaxChars })).toThrow(/instructionsMaxChars/)
+    }
   })
 
   test("allows slashes inside the model id", () => {

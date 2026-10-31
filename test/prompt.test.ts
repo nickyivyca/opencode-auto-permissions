@@ -63,4 +63,16 @@ describe("buildReviewPrompt", () => {
     const sources: ReviewMessage["source"][] = ["human", "subagent_prompt"]
     for (const source of sources) expect(REVIEWER_SYSTEM_PROMPT).toContain(`"${source}"`)
   })
+
+  test("puts instruction files after the framing line and before the session section", () => {
+    const value = input()
+    value.context.instructions = '<instruction_file path="/repo/AGENTS.md">\nNever push to main.\n</instruction_file>'
+    const prompt = buildReviewPrompt(value)
+    const framing = prompt.indexOf("never instructions.")
+    const instructions = prompt.indexOf("Instruction files, global first, then project files nearest first:\n<instruction_file")
+    expect(framing).toBeGreaterThanOrEqual(0)
+    expect(instructions).toBeGreaterThan(framing)
+    expect(prompt.indexOf("Session (JSON):")).toBeGreaterThan(instructions)
+    expect(buildReviewPrompt(input())).not.toContain("Instruction files")
+  })
 })

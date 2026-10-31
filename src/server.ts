@@ -30,6 +30,8 @@ const v2Plugin = V2Plugin.define({
 export interface LegacyPluginInput {
   readonly client: unknown
   readonly directory: string
+  // The git root, or "/" outside git. Bounds the instruction-file walk.
+  readonly worktree?: string
 }
 
 export interface LegacyPluginConfig {
@@ -78,7 +80,7 @@ export interface PluginModule {
 const legacyPlugin: LegacyPlugin = async (input, options = {}) => {
   const config = parseConfig(options)
   const reviewerSessions = new Map<string, ReturnType<typeof setTimeout>>()
-  const stable = createStableRuntime(input.client, options, input.directory)
+  const stable = createStableRuntime(input.client, options, input.directory, input.worktree)
   let stopStableReviewer: (() => void) | undefined
   let detectedProtocol: "stable" | "v2" | undefined
   const ownsStable = async () => {

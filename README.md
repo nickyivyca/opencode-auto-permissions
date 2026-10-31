@@ -104,6 +104,20 @@ Code-side guardrails downgrade `allow_session` to a one-time approval when patte
 
 When an action is rejected, Auto Permissions returns the reason to the main agent and asks it to continue with a safer alternative when possible. For example, it can target a generated subdirectory instead of a broad recursive delete, use `--force-with-lease` instead of an unrestricted force push, or inspect a deployment plan before applying it. A denial should redirect useful work rather than end the session.
 
+### Project Instructions
+
+With `instructions` enabled, the reviewer also receives instruction files such as `AGENTS.md`, so it can hold the agent to project rules like "never push to `main`".
+
+- `true` copies OpenCode 1.x discovery: the first of `~/.config/opencode/AGENTS.md` and `~/.claude/CLAUDE.md`, then every `AGENTS.md` from the session directory up to the git root, nearest first (`CLAUDE.md`, then `CONTEXT.md`, only when no `AGENTS.md` is found). It follows `OPENCODE_CONFIG_DIR`, `OPENCODE_DISABLE_CLAUDE_CODE`, `OPENCODE_DISABLE_CLAUDE_CODE_PROMPT`, and `OPENCODE_DISABLE_PROJECT_CONFIG` the way OpenCode does. The config `instructions` field and nested `AGENTS.md` files that OpenCode attaches when a file in a subfolder is read are not followed.
+- Files are read on every review, so an edit applies to the next one.
+- Instructions can only make reviews stricter. A prohibition counts as an explicit human boundary; nothing in a file can authorize an action or override a denial, and text addressed to the reviewer is ignored. A hostile file can at worst bring back the behavior without instructions.
+- A human message overrides a conflicting rule only when it asks for the forbidden action itself. Messages the coding agent wrote for a subagent never count as the human.
+- Edits to an instruction file are allowed when the human asked for them or when they only add information; an unrequested edit that removes or weakens a rule is denied. OpenCode allows edits by default, so add `ask` patterns such as `"*AGENTS.md": "ask"` to `edit` for those edits to be reviewed.
+- When a rule depends on state the reviewer cannot see, such as the current branch, the action is denied until its target is explicit.
+- With instructions loaded, routine commands such as test runs are no longer approved without a model review, because a file may forbid them.
+
+The instruction text comes before the request in the review prompt, so providers with automatic prefix caching (DeepSeek, Moonshot) reuse it across reviews. Anthropic models cache only the system prompt here, so each review pays for the instruction text in full.
+
 ## Choosing Rules
 
 Use OpenCode's three permission outcomes deliberately:
@@ -132,6 +146,8 @@ The plugin tuple accepts these options:
 | `shadow` | `false` | Evaluate and record decisions without replying to permission requests. |
 | `runtime` | `"auto"` | Diagnostics override: `"auto"`, `"stable"`, or `"v2"`. Leave this on `"auto"` in normal use. |
 | `debug` | `false` | Write the latest 100 privacy-minimized outcomes to a JSONL file. Use `true` for the default path or provide a file path. |
+| `instructions` | `false` | Give the reviewer the project's instruction files. `true` finds the same files OpenCode loads for the session; a list names files explicitly, relative to the session directory or starting with `~/`. See [Project Instructions](#project-instructions). |
+| `instructionsMaxChars` | `64000` | Cap on the combined instruction text, from 1,000 to 500,000 characters. Over the cap, the middle is cut and the start and end are kept. |
 
 Start with `shadow: true` if you want to observe behavior before enabling automatic replies. Because options are an advanced manual configuration, edit both generated entries so the server and TUI receive identical settings.
 

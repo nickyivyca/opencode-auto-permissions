@@ -7,6 +7,7 @@ export function createStableRuntime(
   injectedClient: unknown,
   options: Readonly<Record<string, unknown>>,
   directory: string,
+  worktree?: string,
 ) {
   const client = compatibleClient(injectedClient)
   const listeners = new Map<string, Set<Handler>>()
@@ -83,7 +84,7 @@ export function createStableRuntime(
       },
       location: { default: () => ({ directory }) },
     },
-    location: { directory },
+    location: { directory, ...(worktree ? { worktree } : {}) },
     showToast(input) {
       if (typeof client.tui?.showToast !== "function") return
       void client.tui.showToast({ directory, ...input }).catch(() => undefined)
