@@ -14,6 +14,16 @@ describe("parseDecision", () => {
     ).toEqual({ kind: "allow_session", reasonCode: "repeatable_read", reason: "Safe for this session." })
   })
 
+  test("accepts ask only when the ask option is on", () => {
+    const value = { decision: "ask", reasonCode: "human_rule_conflict", reason: "AGENTS.md forbids pushing to main." }
+    expect(parseDecision(value)).toBeNull()
+    expect(parseDecision(value, { ask: true })).toEqual({
+      kind: "ask",
+      reasonCode: "human_rule_conflict",
+      reason: "AGENTS.md forbids pushing to main.",
+    })
+  })
+
   test("truncates an over-long reason at the boundary", () => {
     const decision = parseDecision({
       decision: "allow",

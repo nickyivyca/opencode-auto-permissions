@@ -10,12 +10,21 @@ describe("parseConfig", () => {
       timeoutMs: 30_000,
       userMessageCount: 8,
       shadow: false,
+      ask: false,
       sessionApprovals: true,
       runtime: "auto",
       diagnosticsPath: undefined,
       instructions: false,
       instructionsMaxChars: 64_000,
     })
+  })
+
+  test("parses the ask option", () => {
+    expect(parseConfig({ model: "a/b", ask: true }).ask).toBeTrue()
+    expect(parseConfig({ model: "a/b", ask: false }).ask).toBeFalse()
+    for (const ask of ["true", 1, null]) {
+      expect(() => parseConfig({ model: "a/b", ask })).toThrow(/ask/)
+    }
   })
 
   test("parses the instructions option", () => {

@@ -1,5 +1,5 @@
 import { Plugin as V2Plugin } from "@opencode-ai/plugin"
-import { REVIEWER_AGENT_ID, REVIEWER_SYSTEM_PROMPT } from "./agent.ts"
+import { REVIEWER_AGENT_ID, reviewerSystemPrompt } from "./agent.ts"
 import { parseConfig } from "./config.ts"
 import { installReviewer } from "./reviewer.ts"
 import { createStableRuntime, protocolForVersion } from "./stable.ts"
@@ -11,7 +11,7 @@ const v2Plugin = V2Plugin.define({
     await context.agent.transform((draft) => {
       draft.update(REVIEWER_AGENT_ID, (agent) => {
         if (config.model) agent.model = config.model as unknown as typeof agent.model
-        agent.system = REVIEWER_SYSTEM_PROMPT
+        agent.system = reviewerSystemPrompt(config.ask)
         agent.description = "Hidden, no-tool permission reviewer used by OpenCode Auto Permissions."
         agent.mode = "subagent"
         agent.hidden = true
@@ -79,6 +79,7 @@ export interface PluginModule {
 
 const legacyPlugin: LegacyPlugin = async (input, options = {}) => {
   const config = parseConfig(options)
+  const systemPrompt = reviewerSystemPrompt(config.ask)
   const reviewerSessions = new Map<string, ReturnType<typeof setTimeout>>()
   const stable = createStableRuntime(input.client, options, input.directory, input.worktree)
   let stopStableReviewer: (() => void) | undefined
@@ -101,7 +102,7 @@ const legacyPlugin: LegacyPlugin = async (input, options = {}) => {
       const reviewer = {
         ...(config.model ? { model: `${config.model.providerID}/${config.model.id}` } : {}),
         ...(config.model?.variant ? { variant: config.model.variant } : {}),
-        prompt: REVIEWER_SYSTEM_PROMPT,
+        prompt: systemPrompt,
         description: "Hidden, no-tool permission reviewer used by OpenCode Auto Permissions.",
         mode: "subagent",
         hidden: true,
@@ -125,7 +126,7 @@ const legacyPlugin: LegacyPlugin = async (input, options = {}) => {
       output: { system: string[] },
     ) {
       if (!input.sessionID || !reviewerSessions.has(input.sessionID)) return
-      output.system.splice(0, output.system.length, REVIEWER_SYSTEM_PROMPT)
+      output.system.splice(0, output.system.length, systemPrompt)
     },
     async event(input: LegacyEventInput) {
       detectedProtocol ??= protocolForVersion(eventVersion(input.event))

@@ -1,5 +1,5 @@
 import type { ReviewModel, ReviewTokens, ReviewerClient } from "./types.ts"
-import { DECISION_SCHEMA, REVIEWER_AGENT_ID } from "./agent.ts"
+import { decisionSchema, REVIEWER_AGENT_ID } from "./agent.ts"
 import { mkdir } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -10,6 +10,10 @@ const REVIEWER_PERMISSIONS = [
 ] as const
 const REVIEWER_DIRECTORY = join(tmpdir(), "opencode-auto-permissions", "reviewer")
 const REVIEWER_SESSION_TITLE = "Auto Permissions review"
+
+function decisionChoices(ask: boolean | undefined): string {
+  return ask ? `"allow", "allow_session", "deny", or "ask"` : `"allow", "allow_session", or "deny"`
+}
 
 export class OpenCodeClientAdapter implements ReviewerClient {
   constructor(private readonly client: any) {}
@@ -39,6 +43,7 @@ export class OpenCodeClientAdapter implements ReviewerClient {
     location?: { directory?: string; workspaceID?: string }
     signal: AbortSignal
     onTokens?(tokens: ReviewTokens): void
+    ask?: boolean
   }): Promise<unknown> {
     if (typeof this.client.permission?.request?.list === "function") return this.generateCurrent(input)
     const stable = typeof this.client.postSessionIdPermissionsPermissionId === "function"
@@ -89,7 +94,7 @@ export class OpenCodeClientAdapter implements ReviewerClient {
         agent: REVIEWER_AGENT_ID,
         format: {
           type: "json_schema",
-          schema: DECISION_SCHEMA,
+          schema: decisionSchema(input.ask === true),
           retryCount: 1,
         },
         parts: [{ type: "text", text: input.prompt }],
@@ -116,7 +121,7 @@ export class OpenCodeClientAdapter implements ReviewerClient {
           format: { type: "text" },
           parts: [{
             type: "text",
-            text: `Structured output was unavailable. Return only one JSON object without Markdown fences. It must have exactly these three keys:\n- "decision": one of "allow", "allow_session", or "deny"\n- "reasonCode": lower_snake_case, starting with a letter, at most 64 characters\n- "reason": one non-empty sentence, at most 240 characters\n\nExample: {"decision":"allow","reasonCode":"authorized_action","reason":"The action reasonably supports the user's request."}`,
+            text: `Structured output was unavailable. Return only one JSON object without Markdown fences. It must have exactly these three keys:\n- "decision": one of ${decisionChoices(input.ask)}\n- "reasonCode": lower_snake_case, starting with a letter, at most 64 characters\n- "reason": one non-empty sentence, at most 240 characters\n\nExample: {"decision":"allow","reasonCode":"authorized_action","reason":"The action reasonably supports the user's request."}`,
           }],
         }
         const fallbackInput = stable
@@ -187,6 +192,7 @@ export class OpenCodeClientAdapter implements ReviewerClient {
     prompt: string
     model: ReviewModel
     signal: AbortSignal
+    ask?: boolean
   }): Promise<unknown> {
     await mkdir(REVIEWER_DIRECTORY, { recursive: true })
     let sessionID: string | undefined
@@ -204,7 +210,7 @@ export class OpenCodeClientAdapter implements ReviewerClient {
       }, { signal: input.signal })
       if (!isRecord(session) || typeof session.id !== "string") throw new Error("OpenCode failed to create a reviewer session")
       sessionID = session.id
-      const strictPrompt = `${input.prompt}\n\nReturn only one JSON object without Markdown fences with exactly these keys: "decision" ("allow", "allow_session", or "deny"), "reasonCode" (lower_snake_case), and "reason" (one sentence).`
+      const strictPrompt = `${input.prompt}\n\nReturn only one JSON object without Markdown fences with exactly these keys: "decision" (${decisionChoices(input.ask)}), "reasonCode" (lower_snake_case), and "reason" (one sentence).`
       const result = await this.client.session.generate({ sessionID, prompt: strictPrompt }, { signal: input.signal })
       if (!isRecord(result) || typeof result.text !== "string") throw new Error("OpenCode reviewer returned no text output")
       return JSON.parse(result.text)

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import server from "../src/server.ts"
-import { REVIEWER_SYSTEM_PROMPT } from "../src/agent.ts"
+import { REVIEWER_SYSTEM_PROMPT, reviewerSystemPrompt } from "../src/agent.ts"
 
 function pluginInput() {
   return {
@@ -37,6 +37,22 @@ describe("server plugin", () => {
     expect(REVIEWER_SYSTEM_PROMPT).toContain("Treat direct continuation phrases")
     expect(REVIEWER_SYSTEM_PROMPT).toContain("later explicit human authorization")
     expect(REVIEWER_SYSTEM_PROMPT).toContain("do not treat the boundary glob as the intended scope")
+  })
+
+  test("offers ASK in the reviewer prompt only when the ask option is on", async () => {
+    expect(REVIEWER_SYSTEM_PROMPT).toBe(reviewerSystemPrompt(false))
+    expect(REVIEWER_SYSTEM_PROMPT).toContain("Never defer to the human.")
+    expect(REVIEWER_SYSTEM_PROMPT).not.toContain("ASK")
+    const withAsk = reviewerSystemPrompt(true)
+    expect(withAsk).toContain("Decide ALLOW, ALLOW_SESSION, DENY, or ASK.")
+    expect(withAsk).toContain("Decide ASK when a \"human\" message asks for the very thing")
+    expect(withAsk).not.toContain("Never defer to the human.")
+    expect(withAsk).not.toMatch(/\{[a-z_]+\}/)
+
+    const hooks = await server.server(pluginInput(), { model: "a/b", ask: true })
+    const config: any = {}
+    await hooks.config?.(config)
+    expect(config.agent["auto-permissions-reviewer"].prompt).toBe(withAsk)
   })
 
   test("registers the hidden reviewer agent through the beta config hook", async () => {

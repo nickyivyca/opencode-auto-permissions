@@ -23,6 +23,8 @@ export type Decision =
   | { kind: "allow"; reasonCode: string; reason: string }
   | { kind: "allow_session"; reasonCode: string; reason: string }
   | { kind: "deny"; reasonCode: string; reason: string }
+  // Only with the ask option: leave the request to OpenCode's own prompt.
+  | { kind: "ask"; reasonCode: string; reason: string }
 
 // Where a user-role message came from. Root-session messages are typed by the
 // human; a subagent session's user messages are task prompts the coding agent
@@ -103,6 +105,8 @@ export interface ReviewerClient {
     location?: { directory?: string; workspaceID?: string }
     signal: AbortSignal
     onTokens?(tokens: ReviewTokens): void
+    // Offer the ask verdict in the output format.
+    ask?: boolean
   }): Promise<unknown>
   reply(input: {
     sessionID: string

@@ -334,6 +334,34 @@ describe("OpenCodeClientAdapter", () => {
     expect(reported).toEqual([{ input: 200, output: 40, cache: { read: 1_000, write: 0 } }])
   })
 
+  test.each([false, true])("offers ask in the output format only when asked (ask: %p)", async (ask) => {
+    const bodies: any[] = []
+    const client = new OpenCodeClientAdapter({
+      session: {
+        create: async () => ({ data: { id: "ses_review" } }),
+        prompt: async (input: any) => {
+          bodies.push(input.body ?? input)
+          if (bodies.length === 1) {
+            return { data: { info: { error: { name: "StructuredOutputError", data: { message: "No structured output" } } }, parts: [] } }
+          }
+          return { data: { info: { role: "assistant" }, parts: [{ type: "text", text: '{"decision":"ask","reasonCode":"x","reason":"Ask."}' }] } }
+        },
+        delete: async () => ({ data: true }),
+      },
+    })
+
+    await client.generate({
+      prompt: "review",
+      model: { providerID: "deepseek", id: "deepseek-flash" },
+      parentSessionID: "ses_parent",
+      signal: new AbortController().signal,
+      ...(ask ? { ask } : {}),
+    })
+
+    expect(bodies[0].format.schema.properties.decision.enum.includes("ask")).toBe(ask)
+    expect(bodies[1].parts[0].text.includes('"ask"')).toBe(ask)
+  })
+
   test("reports no token usage when the provider omits it", async () => {
     const client = new OpenCodeClientAdapter({
       session: {

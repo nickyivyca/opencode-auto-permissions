@@ -12,6 +12,8 @@ export interface Config {
   timeoutMs: number
   userMessageCount: number
   shadow: boolean
+  // Lets the reviewer leave a human-vs-instruction-file conflict to the human.
+  ask: boolean
   sessionApprovals: boolean
   runtime: "auto" | "stable" | "v2"
   diagnosticsPath: string | undefined
@@ -38,6 +40,7 @@ export function parseConfig(options: Readonly<Record<string, unknown>>): Config 
       "userMessageCount",
     ),
     shadow: options.shadow === true,
+    ask: parseAsk(options.ask),
     sessionApprovals: options.sessionApprovals !== false,
     runtime: parseRuntime(options.runtime),
     diagnosticsPath: parseDiagnosticsPath(options.debug),
@@ -87,6 +90,11 @@ function parseInstructions(value: unknown): boolean | string[] {
     return value.map((item: string) => item.trim())
   }
   throw new Error("Auto Permissions instructions must be true, false, or a non-empty list of file paths")
+}
+
+function parseAsk(value: unknown): boolean {
+  if (value === undefined || typeof value === "boolean") return value === true
+  throw new Error("Auto Permissions ask must be true or false")
 }
 
 function parseRuntime(value: unknown): Config["runtime"] {

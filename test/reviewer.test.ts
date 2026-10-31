@@ -556,6 +556,44 @@ describe("installReviewer", () => {
     dispose()
   })
 
+  test("ask leaves the request open for the human", async () => {
+    const app = harness({ model: "a/b", ask: true })
+    app.requests.push(request("git push origin main"))
+    const asks: boolean[] = []
+    app.client.generate = async (input) => {
+      asks.push(input.ask === true)
+      return { decision: "ask", reasonCode: "human_rule_conflict", reason: "AGENTS.md forbids pushing to main." }
+    }
+    const dispose = installReviewer(app.context, { client: app.client })
+
+    app.emit("permission.v2.asked", app.requests[0])
+    await settle()
+
+    expect(asks).toEqual([true])
+    expect(app.replies).toEqual([])
+    expect(app.toasts).toEqual(["Needs your approval"])
+    expect(app.resumptions).toEqual([])
+    dispose()
+  })
+
+  test("an ask verdict without the ask option fails closed", async () => {
+    const app = harness({ model: "a/b" })
+    app.requests.push(request("git push origin main"))
+    const asks: boolean[] = []
+    app.client.generate = async (input) => {
+      asks.push(input.ask === true)
+      return { decision: "ask", reasonCode: "human_rule_conflict", reason: "AGENTS.md forbids pushing to main." }
+    }
+    const dispose = installReviewer(app.context, { client: app.client })
+
+    app.emit("permission.v2.asked", app.requests[0])
+    await settle()
+
+    expect(asks.every((ask) => !ask)).toBeTrue()
+    expect(app.replies.map((reply) => reply.reply)).toEqual(["reject"])
+    dispose()
+  })
+
   test("auto-detects the stable permission event protocol", async () => {
     const app = harness()
     const stable = request("git status", "stable")

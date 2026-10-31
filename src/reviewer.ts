@@ -161,6 +161,13 @@ async function reviewAndReply(
     return
   }
 
+  if (decision.kind === "ask") {
+    // No reply, so OpenCode's own permission prompt stays open for the human.
+    context.showToast?.({ title: "Needs your approval", message: decision.reason, variant: "info", duration: 8_000 })
+    writeDecision(config, request, startedAt, decision, decisionSource(policyDecision, cachedDecision), "manual")
+    return
+  }
+
   const pending = await isRequestPending(context, request)
   if (!pending || parentSignal.aborted) return
 
@@ -487,12 +494,13 @@ async function singleModelDecision(
         ...(input.context.directory ? { location: { directory: input.context.directory } } : {}),
         signal: timeout.signal,
         onTokens,
+        ...(config.ask ? { ask: true } : {}),
       })])
     } catch (error) {
       if (timeout.signal.aborted && !parentSignal.aborted) throw new Error("Permission review timed out")
       throw error
     }
-    const decision = parseDecision(structured)
+    const decision = parseDecision(structured, { ask: config.ask })
     if (!decision) throw new Error("Reviewer returned an invalid decision")
     return decision
   } finally {
