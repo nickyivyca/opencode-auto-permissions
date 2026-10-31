@@ -1,5 +1,6 @@
 import type { ReviewModel } from "./types.ts"
 import { defaultDiagnosticsPath } from "./diagnostics.ts"
+import { defaultUsagePath } from "./usage.ts"
 
 const DEFAULT_TIMEOUT_MS = 30_000
 const DEFAULT_USER_MESSAGE_COUNT = 8
@@ -17,6 +18,8 @@ export interface Config {
   sessionApprovals: boolean
   runtime: "auto" | "stable" | "v2"
   diagnosticsPath: string | undefined
+  // Uncapped per-attempt token and cost ledger.
+  usagePath: string | undefined
   // true discovers files the way OpenCode does; a list names them explicitly.
   instructions: boolean | string[]
   instructionsMaxChars: number
@@ -44,6 +47,7 @@ export function parseConfig(options: Readonly<Record<string, unknown>>): Config 
     sessionApprovals: options.sessionApprovals !== false,
     runtime: parseRuntime(options.runtime),
     diagnosticsPath: parseDiagnosticsPath(options.debug),
+    usagePath: parseUsagePath(options.usage),
     instructions: parseInstructions(options.instructions),
     instructionsMaxChars: boundedInteger(
       options.instructionsMaxChars,
@@ -81,6 +85,13 @@ function parseDiagnosticsPath(value: unknown): string | undefined {
   if (value === true) return defaultDiagnosticsPath()
   if (typeof value === "string" && value.trim()) return value.trim()
   throw new Error('Auto Permissions debug must be true, false, or a file path')
+}
+
+function parseUsagePath(value: unknown): string | undefined {
+  if (value === undefined || value === false) return undefined
+  if (value === true) return defaultUsagePath()
+  if (typeof value === "string" && value.trim()) return value.trim()
+  throw new Error('Auto Permissions usage must be true, false, or a file path')
 }
 
 function parseInstructions(value: unknown): boolean | string[] {

@@ -391,6 +391,23 @@ async function appendBounded(path, record) {
   }
 }
 
+// src/usage.ts
+import { appendFile, mkdir as mkdir2 } from "fs/promises";
+import { homedir as homedir2 } from "os";
+import { dirname as dirname2, join as join2 } from "path";
+function defaultUsagePath() {
+  const stateRoot = process.env.XDG_STATE_HOME ?? join2(homedir2(), ".local", "state");
+  return join2(stateRoot, "opencode", "auto-permissions", "usage.jsonl");
+}
+function writeUsage(path, record) {
+  if (!path)
+    return;
+  mkdir2(dirname2(path), { recursive: true }).then(() => appendFile(path, JSON.stringify(record) + `
+`, { encoding: "utf8", mode: 384 })).catch(() => {
+    return;
+  });
+}
+
 // src/config.ts
 var DEFAULT_TIMEOUT_MS = 30000;
 var DEFAULT_USER_MESSAGE_COUNT = 8;
@@ -410,6 +427,7 @@ function parseConfig(options) {
     sessionApprovals: options.sessionApprovals !== false,
     runtime: parseRuntime(options.runtime),
     diagnosticsPath: parseDiagnosticsPath(options.debug),
+    usagePath: parseUsagePath(options.usage),
     instructions: parseInstructions(options.instructions),
     instructionsMaxChars: boundedInteger(options.instructionsMaxChars, DEFAULT_INSTRUCTIONS_MAX_CHARS, 1000, 500000, "instructionsMaxChars")
   };
@@ -445,6 +463,15 @@ function parseDiagnosticsPath(value) {
   if (typeof value === "string" && value.trim())
     return value.trim();
   throw new Error("Auto Permissions debug must be true, false, or a file path");
+}
+function parseUsagePath(value) {
+  if (value === undefined || value === false)
+    return;
+  if (value === true)
+    return defaultUsagePath();
+  if (typeof value === "string" && value.trim())
+    return value.trim();
+  throw new Error("Auto Permissions usage must be true, false, or a file path");
 }
 function parseInstructions(value) {
   if (value === undefined || value === false)
@@ -553,14 +580,14 @@ Submit the final decision through the requested output format. When structured o
 var REVIEWER_SYSTEM_PROMPT = reviewerSystemPrompt(false);
 
 // src/opencode-client.ts
-import { mkdir as mkdir2 } from "fs/promises";
+import { mkdir as mkdir3 } from "fs/promises";
 import { tmpdir } from "os";
-import { join as join2 } from "path";
+import { join as join3 } from "path";
 var REVIEWER_PERMISSIONS = [
   { permission: "*", pattern: "*", action: "deny" },
   { permission: "StructuredOutput", pattern: "*", action: "allow" }
 ];
-var REVIEWER_DIRECTORY = join2(tmpdir(), "opencode-auto-permissions", "reviewer");
+var REVIEWER_DIRECTORY = join3(tmpdir(), "opencode-auto-permissions", "reviewer");
 var REVIEWER_SESSION_TITLE = "Auto Permissions review";
 function decisionChoices(ask) {
   return ask ? `"allow", "allow_session", "deny", or "ask"` : `"allow", "allow_session", or "deny"`;
@@ -572,7 +599,7 @@ class OpenCodeClientAdapter {
     this.client = client;
   }
   async prewarm() {
-    await mkdir2(REVIEWER_DIRECTORY, { recursive: true });
+    await mkdir3(REVIEWER_DIRECTORY, { recursive: true });
     const location = { directory: REVIEWER_DIRECTORY };
     const requests = [];
     if (typeof this.client.app?.agents === "function")
@@ -601,9 +628,10 @@ class OpenCodeClientAdapter {
     if (!session || typeof session.create !== "function" || typeof session.prompt !== "function") {
       throw new Error("OpenCode reviewer session API is unavailable");
     }
-    await mkdir2(REVIEWER_DIRECTORY, { recursive: true });
+    await mkdir3(REVIEWER_DIRECTORY, { recursive: true });
     const location = { directory: REVIEWER_DIRECTORY };
     let sessionID;
+    const turns = [];
     const abortRemote = () => {
       if (!sessionID || typeof session.abort !== "function")
         return;
@@ -653,6 +681,7 @@ class OpenCodeClientAdapter {
       };
       try {
         const result = unwrapData(await session.prompt(promptInput, { signal: input.signal }));
+        turns.push(result);
         const structured = assistantStructured(result);
         reportTokens(result, input.onTokens);
         return structured;
@@ -674,12 +703,15 @@ Example: {"decision":"allow","reasonCode":"authorized_action","reason":"The acti
         };
         const fallbackInput = stable ? { path: { id: sessionID }, query: location, body: fallbackBody } : { sessionID, ...location, ...fallbackBody };
         const result = unwrapData(await session.prompt(fallbackInput, { signal: input.signal }));
-        const parsed = JSON.parse(assistantText(result));
+        turns.push(result);
         reportTokens(result, input.onTokens);
-        return parsed;
+        return JSON.parse(assistantText(result));
       }
     } finally {
       input.signal.removeEventListener("abort", abortRemote);
+      const usage = sumUsage(turns);
+      if (usage)
+        input.onUsage?.(usage);
       if (sessionID && typeof session.delete === "function") {
         const deleteInput = stable ? { path: { id: sessionID }, query: location } : { sessionID, ...location };
         await Promise.resolve(session.delete(deleteInput)).catch(() => {
@@ -726,7 +758,7 @@ Example: {"decision":"allow","reasonCode":"authorized_action","reason":"The acti
     }
   }
   async generateCurrent(input) {
-    await mkdir2(REVIEWER_DIRECTORY, { recursive: true });
+    await mkdir3(REVIEWER_DIRECTORY, { recursive: true });
     let sessionID;
     const abortRemote = () => {
       if (sessionID)
@@ -791,11 +823,36 @@ function reportTokens(value, onTokens) {
   const tokens = value.info.tokens;
   if (!isRecord2(tokens) || !isRecord2(tokens.cache))
     return;
-  const { input, output } = tokens;
+  const { input, output, reasoning } = tokens;
   const { read, write } = tokens.cache;
   if (![input, output, read, write].every((count) => typeof count === "number"))
     return;
-  onTokens({ input, output, cache: { read, write } });
+  onTokens({ input, output, ...typeof reasoning === "number" ? { reasoning } : {}, cache: { read, write } });
+}
+function sumUsage(messages) {
+  const usage = { turns: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } };
+  let cost;
+  for (const message of messages) {
+    const info = isRecord2(message) && isRecord2(message.info) ? message.info : message;
+    if (!isRecord2(info) || info.role !== "assistant" || !isRecord2(info.tokens))
+      continue;
+    const tokens = info.tokens;
+    const cache = isRecord2(tokens.cache) ? tokens.cache : {};
+    usage.turns++;
+    usage.tokens.input += count(tokens.input);
+    usage.tokens.output += count(tokens.output);
+    usage.tokens.reasoning += count(tokens.reasoning);
+    usage.tokens.cache.read += count(cache.read);
+    usage.tokens.cache.write += count(cache.write);
+    if (typeof info.cost === "number" && Number.isFinite(info.cost))
+      cost = (cost ?? 0) + info.cost;
+  }
+  if (usage.turns === 0)
+    return;
+  return cost === undefined ? usage : { ...usage, cost };
+}
+function count(value) {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 function isStructuredOutputError(error) {
   if (!isRecord2(error))
@@ -840,18 +897,18 @@ function isRecord2(value) {
 // src/instructions.ts
 import { readFile as readFile2, stat } from "fs/promises";
 import { homedir as osHomedir } from "os";
-import { dirname as dirname2, isAbsolute, join as join3, resolve } from "path";
+import { dirname as dirname3, isAbsolute, join as join4, resolve } from "path";
 var OPENING_TAG = "<instruction_file";
 var CLOSING_TAG = "</instruction_file>";
 async function discoverInstructionPaths(location, environment = {}) {
   const env = environment.env ?? process.env;
   const home = environment.homedir ?? osHomedir();
   const disableClaudeCode = effectBoolean(env.OPENCODE_DISABLE_CLAUDE_CODE) || effectBoolean(env.OPENCODE_DISABLE_CLAUDE_CODE_PROMPT);
-  const configDirectory = env.OPENCODE_CONFIG_DIR ?? join3(env.XDG_CONFIG_HOME || join3(home, ".config"), "opencode");
+  const configDirectory = env.OPENCODE_CONFIG_DIR ?? join4(env.XDG_CONFIG_HOME || join4(home, ".config"), "opencode");
   const paths = new Set;
   const globalFiles = [
-    join3(configDirectory, "AGENTS.md"),
-    ...disableClaudeCode ? [] : [join3(env.OPENCODE_TEST_HOME ?? home, ".claude", "CLAUDE.md")]
+    join4(configDirectory, "AGENTS.md"),
+    ...disableClaudeCode ? [] : [join4(env.OPENCODE_TEST_HOME ?? home, ".claude", "CLAUDE.md")]
   ];
   for (const file of globalFiles) {
     if (await exists(file)) {
@@ -877,7 +934,7 @@ function explicitInstructionPaths(paths, directory2, environment = {}) {
   const home = env.OPENCODE_TEST_HOME ?? environment.homedir ?? osHomedir();
   return paths.flatMap((path) => {
     if (path.startsWith("~/"))
-      return [join3(home, path.slice(2))];
+      return [join4(home, path.slice(2))];
     if (isAbsolute(path))
       return [resolve(path)];
     return directory2 ? [resolve(directory2, path)] : [];
@@ -923,12 +980,12 @@ async function findUp(target, start, stop) {
   const result = [];
   let current = start;
   while (true) {
-    const search = join3(current, target);
+    const search = join4(current, target);
     if (await exists(search))
       result.push(search);
     if (stop === current)
       break;
-    const parent = dirname2(current);
+    const parent = dirname3(current);
     if (parent === current)
       break;
     current = parent;
@@ -1164,7 +1221,7 @@ async function reviewAndReply(context, client, config, request, parentSignal, ov
   const reviewKey = concurrentReviewKey(request, input);
   let shared = sharedReviews.get(reviewKey);
   if (!policyDecision && !cachedDecision && !shared) {
-    shared = modelDecision(context, client, config, input, sharedReviewSignal);
+    shared = modelDecision(context, client, config, request.id, input, sharedReviewSignal);
     sharedReviews.set(reviewKey, shared);
     shared.finally(() => {
       if (sharedReviews.get(reviewKey) === shared)
@@ -1357,7 +1414,7 @@ async function withInstructions(context, config, request, input) {
   }
   return { ...input, context: { ...input.context, instructions: rendered.text } };
 }
-async function modelDecision(context, client, config, input, parentSignal) {
+async function modelDecision(context, client, config, requestID, input, parentSignal) {
   const inheritedModel = input.context.model;
   const candidates = [];
   if (config.model) {
@@ -1387,11 +1444,35 @@ async function modelDecision(context, client, config, input, parentSignal) {
       timestamp: new Date().toISOString(),
       event: "model_attempt"
     });
+    let usage;
+    let outcome;
+    const recordUsage = () => {
+      if (!usage || !outcome)
+        return;
+      writeUsage(config.usagePath, {
+        ts: new Date().toISOString(),
+        requestID,
+        sessionID: diagnostic.sessionID,
+        providerID: model.providerID,
+        modelID: model.id,
+        ...model.variant ? { variant: model.variant } : {},
+        attempt: index + 1,
+        outcome,
+        ...usage
+      });
+      usage = undefined;
+    };
+    const onUsage = config.usagePath ? (reported) => {
+      usage = reported;
+      recordUsage();
+    } : undefined;
     try {
       let tokens;
       const decision = await singleModelDecision(client, config, input, parentSignal, model, (reported) => {
         tokens = reported;
-      });
+      }, onUsage);
+      outcome = "decision";
+      recordUsage();
       writeDiagnostic(config.diagnosticsPath, {
         ...diagnostic,
         timestamp: new Date().toISOString(),
@@ -1401,6 +1482,8 @@ async function modelDecision(context, client, config, input, parentSignal) {
       });
       return decision;
     } catch (error) {
+      outcome = parentSignal.aborted ? "cancelled" : "failure";
+      recordUsage();
       if (parentSignal.aborted)
         throw error;
       writeDiagnostic(config.diagnosticsPath, {
@@ -1415,7 +1498,7 @@ async function modelDecision(context, client, config, input, parentSignal) {
   }
   throw lastError;
 }
-async function singleModelDecision(client, config, input, parentSignal, model, onTokens) {
+async function singleModelDecision(client, config, input, parentSignal, model, onTokens, onUsage) {
   const timeout = new AbortController;
   const timer = setTimeout(() => timeout.abort("review timed out"), config.timeoutMs);
   const abort = () => timeout.abort(parentSignal.reason);
@@ -1437,6 +1520,7 @@ async function singleModelDecision(client, config, input, parentSignal, model, o
         ...input.context.directory ? { location: { directory: input.context.directory } } : {},
         signal: timeout.signal,
         onTokens,
+        ...onUsage ? { onUsage } : {},
         ...config.ask ? { ask: true } : {}
       })]);
     } catch (error) {

@@ -21,11 +21,13 @@ import type {
   ReviewInput,
   ReviewModel,
   ReviewTokens,
+  ReviewUsage,
   ReviewerClient,
   RuntimeContext,
 } from "./types.ts"
 import { parseDecision } from "./verdict.ts"
 import { describeError, failureCategory, writeDiagnostic } from "./diagnostics.ts"
+import { writeUsage, type UsageRecord } from "./usage.ts"
 
 export interface ReviewerOverrides {
   client?: ReviewerClient
@@ -142,7 +144,7 @@ async function reviewAndReply(
   const reviewKey = concurrentReviewKey(request, input)
   let shared = sharedReviews.get(reviewKey)
   if (!policyDecision && !cachedDecision && !shared) {
-    shared = modelDecision(context, client, config, input, sharedReviewSignal)
+    shared = modelDecision(context, client, config, request.id, input, sharedReviewSignal)
     sharedReviews.set(reviewKey, shared)
     void shared.finally(() => {
       if (sharedReviews.get(reviewKey) === shared) sharedReviews.delete(reviewKey)
@@ -405,6 +407,7 @@ async function modelDecision(
   context: RuntimeContext,
   client: ReviewerClient,
   config: Config,
+  requestID: string,
   input: Awaited<ReturnType<typeof collectReviewInput>>,
   parentSignal: AbortSignal,
 ): Promise<Decision> {
@@ -435,17 +438,40 @@ async function modelDecision(
     writeDiagnostic(config.diagnosticsPath, {
       ...diagnostic, timestamp: new Date().toISOString(), event: "model_attempt",
     })
+    // Usage arrives when the reviewer session is deleted. After a timeout or
+    // cancellation that is later than the outcome, so whichever comes second
+    // writes the ledger line.
+    let usage: ReviewUsage | undefined
+    let outcome: UsageRecord["outcome"] | undefined
+    const recordUsage = () => {
+      if (!usage || !outcome) return
+      writeUsage(config.usagePath, {
+        ts: new Date().toISOString(), requestID, sessionID: diagnostic.sessionID, providerID: model.providerID,
+        modelID: model.id, ...(model.variant ? { variant: model.variant } : {}), attempt: index + 1, outcome, ...usage,
+      })
+      usage = undefined
+    }
+    const onUsage = config.usagePath
+      ? (reported: ReviewUsage) => {
+          usage = reported
+          recordUsage()
+        }
+      : undefined
     try {
       let tokens: ReviewTokens | undefined
       const decision = await singleModelDecision(client, config, input, parentSignal, model, (reported) => {
         tokens = reported
-      })
+      }, onUsage)
+      outcome = "decision"
+      recordUsage()
       writeDiagnostic(config.diagnosticsPath, {
         ...diagnostic, timestamp: new Date().toISOString(), event: "model_decision", decision: decision.kind,
         ...(tokens ? { tokens } : {}),
       })
       return decision
     } catch (error) {
+      outcome = parentSignal.aborted ? "cancelled" : "failure"
+      recordUsage()
       // A cancelled review must not trigger a fallback review.
       if (parentSignal.aborted) throw error
       writeDiagnostic(config.diagnosticsPath, {
@@ -472,6 +498,7 @@ async function singleModelDecision(
   parentSignal: AbortSignal,
   model: ReviewModel,
   onTokens: (tokens: ReviewTokens) => void,
+  onUsage: ((usage: ReviewUsage) => void) | undefined,
 ): Promise<Decision> {
   const timeout = new AbortController()
   const timer = setTimeout(() => timeout.abort("review timed out"), config.timeoutMs)
@@ -494,6 +521,7 @@ async function singleModelDecision(
         ...(input.context.directory ? { location: { directory: input.context.directory } } : {}),
         signal: timeout.signal,
         onTokens,
+        ...(onUsage ? { onUsage } : {}),
         ...(config.ask ? { ask: true } : {}),
       })])
     } catch (error) {

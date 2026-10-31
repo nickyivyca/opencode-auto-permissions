@@ -331,7 +331,86 @@ describe("OpenCodeClientAdapter", () => {
       signal: new AbortController().signal,
       onTokens: (usage) => reported.push(usage),
     })).resolves.toEqual(decision)
-    expect(reported).toEqual([{ input: 200, output: 40, cache: { read: 1_000, write: 0 } }])
+    expect(reported).toEqual([{ input: 200, output: 40, reasoning: 10, cache: { read: 1_000, write: 0 } }])
+  })
+
+  test("sums every reviewer turn's usage, the failed structured turn included", async () => {
+    const decision = { decision: "allow", reasonCode: "authorized", reason: "Requested by the user." }
+    let prompts = 0
+    let usageBeforeDelete = false
+    const usages: any[] = []
+    const client = new OpenCodeClientAdapter({
+      session: {
+        create: async () => ({ data: { id: "ses_review" } }),
+        prompt: async () => {
+          prompts++
+          if (prompts === 1) {
+            return {
+              data: {
+                info: {
+                  role: "assistant",
+                  cost: 0.0001,
+                  tokens: { input: 700, output: 0, reasoning: 0, cache: { read: 1_000, write: 0 } },
+                  error: { name: "StructuredOutputError", data: { message: "No structured output" } },
+                },
+                parts: [],
+              },
+            }
+          }
+          return {
+            data: {
+              info: { role: "assistant", cost: 0.0002, tokens: { input: 50, output: 60, reasoning: 30, cache: { read: 1_700, write: 0 } } },
+              parts: [{ type: "text", text: JSON.stringify(decision) }],
+            },
+          }
+        },
+        delete: async () => {
+          usageBeforeDelete = usages.length === 1
+          return { data: true }
+        },
+      },
+    })
+
+    await expect(client.generate({
+      prompt: "review",
+      model: { providerID: "deepseek", id: "deepseek-flash" },
+      parentSessionID: "ses_parent",
+      signal: new AbortController().signal,
+      onUsage: (usage) => usages.push(usage),
+    })).resolves.toEqual(decision)
+
+    expect(usageBeforeDelete).toBeTrue()
+    expect(usages).toHaveLength(1)
+    expect(usages[0]).toMatchObject({
+      turns: 2,
+      tokens: { input: 750, output: 60, reasoning: 30, cache: { read: 2_700, write: 0 } },
+    })
+    expect(usages[0].cost).toBeCloseTo(0.0003, 10)
+  })
+
+  test("reports usage when the reviewer's output is invalid and omits cost nobody reported", async () => {
+    const usages: unknown[] = []
+    const client = new OpenCodeClientAdapter({
+      session: {
+        create: async () => ({ data: { id: "ses_review" } }),
+        prompt: async () => ({
+          data: {
+            info: { role: "assistant", tokens: { input: 10, output: 5, cache: { read: 0, write: 0 } } },
+            parts: [{ type: "text", text: "not json" }],
+          },
+        }),
+        delete: async () => ({ data: true }),
+      },
+    })
+
+    await expect(client.generate({
+      prompt: "review",
+      model: { providerID: "deepseek", id: "deepseek-flash" },
+      parentSessionID: "ses_parent",
+      signal: new AbortController().signal,
+      onUsage: (usage) => usages.push(usage),
+    })).rejects.toThrow()
+    expect(usages).toEqual([{ turns: 1, tokens: { input: 10, output: 5, reasoning: 0, cache: { read: 0, write: 0 } } }])
   })
 
   test.each([false, true])("offers ask in the output format only when asked (ask: %p)", async (ask) => {

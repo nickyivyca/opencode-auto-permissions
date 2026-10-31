@@ -14,6 +14,7 @@ describe("parseConfig", () => {
       sessionApprovals: true,
       runtime: "auto",
       diagnosticsPath: undefined,
+      usagePath: undefined,
       instructions: false,
       instructionsMaxChars: 64_000,
     })
@@ -85,6 +86,9 @@ describe("parseConfig", () => {
   test("enables bounded diagnostics with a default or explicit path", () => {
     expect(parseConfig({ model: "a/b", debug: true }).diagnosticsPath).toEndWith("opencode/auto-permissions/decisions.jsonl")
     expect(parseConfig({ model: "a/b", debug: "/tmp/decisions.jsonl" }).diagnosticsPath).toBe("/tmp/decisions.jsonl")
+    expect(parseConfig({ model: "a/b", usage: true }).usagePath).toEndWith("opencode/auto-permissions/usage.jsonl")
+    expect(parseConfig({ model: "a/b", usage: "/tmp/usage.jsonl" }).usagePath).toBe("/tmp/usage.jsonl")
+    expect(() => parseConfig({ model: "a/b", usage: 1 })).toThrow("usage must be true, false, or a file path")
     expect(() => parseConfig({ model: "a/b", debug: 1 })).toThrow(/debug/)
   })
 })

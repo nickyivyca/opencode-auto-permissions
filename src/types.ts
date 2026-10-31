@@ -93,7 +93,18 @@ export interface RuntimeContext {
 export interface ReviewTokens {
   input: number
   output: number
+  reasoning?: number
   cache: { read: number; write: number }
+}
+
+// Everything one reviewer session consumed, summed over the turns that
+// returned, failed structured-output turns included. A turn cut off by a
+// timeout or cancellation returns nothing and is missing. Cost is OpenCode's
+// own figure and is absent when no turn reported one.
+export interface ReviewUsage {
+  turns: number
+  tokens: { input: number; output: number; reasoning: number; cache: { read: number; write: number } }
+  cost?: number
 }
 
 export interface ReviewerClient {
@@ -105,6 +116,8 @@ export interface ReviewerClient {
     location?: { directory?: string; workspaceID?: string }
     signal: AbortSignal
     onTokens?(tokens: ReviewTokens): void
+    // Called once, before the reviewer session is deleted, when any turn returned.
+    onUsage?(usage: ReviewUsage): void
     // Offer the ask verdict in the output format.
     ask?: boolean
   }): Promise<unknown>

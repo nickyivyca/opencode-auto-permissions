@@ -670,6 +670,50 @@ describe("installReviewer", () => {
     }
   })
 
+  test("appends one usage ledger line per model attempt, including late usage after a timeout", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "auto-permissions-reviewer-"))
+    const path = join(directory, "usage.jsonl")
+    const app = harness({ model: "deepseek/deepseek-flash", usage: path, timeoutMs: 100 })
+    const usage = { turns: 1, tokens: { input: 700, output: 50, reasoning: 20, cache: { read: 1_000, write: 0 } }, cost: 0.0001 }
+    let calls = 0
+    app.client.generate = async ({ signal, onUsage }) => {
+      calls++
+      if (calls === 1) {
+        await new Promise((resolve) => signal.addEventListener("abort", resolve, { once: true }))
+        setTimeout(() => onUsage?.(usage), 20)
+        throw new Error("aborted")
+      }
+      onUsage?.(usage)
+      return { decision: "allow", reasonCode: "requested_action", reason: "The user requested this action." }
+    }
+    app.requests.push({ ...request("git push origin feature"), sessionID: "ses_child" })
+    const dispose = installReviewer(app.context, { client: app.client })
+    try {
+      app.emit("permission.v2.asked", app.requests[0])
+      let records: Record<string, unknown>[] = []
+      for (let attempt = 0; attempt < 100 && records.length < 2; attempt++) {
+        await settle()
+        await new Promise((resolve) => setTimeout(resolve, 10))
+        records = (await readFile(path, "utf8").catch(() => ""))
+          .split("\n").filter(Boolean).map((line) => JSON.parse(line))
+      }
+      expect(records.map((record) => [record.attempt, record.outcome])).toEqual([[2, "decision"], [1, "failure"]])
+      const timedOut = records.find((record) => record.attempt === 1)!
+      expect(timedOut).toMatchObject({
+        requestID: "per_1",
+        sessionID: "ses_root",
+        providerID: "deepseek",
+        ...usage,
+      })
+      expect(Object.keys(timedOut).sort()).toEqual(
+        ["attempt", "cost", "modelID", "outcome", "providerID", "requestID", "sessionID", "tokens", "ts", "turns"],
+      )
+    } finally {
+      dispose()
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
   test("reads instruction files on every review and logs truncation and missing files", async () => {
     const directory = await mkdtemp(join(tmpdir(), "auto-permissions-reviewer-"))
     const rules = join(directory, "REVIEW.md")

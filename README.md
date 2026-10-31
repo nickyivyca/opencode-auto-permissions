@@ -155,6 +155,7 @@ The plugin tuple accepts these options:
 | `ask` | `false` | Let the reviewer leave a conflict between a human request and an instruction-file rule to the human, through OpenCode's own prompt. See [Leaving a Conflict to the Human](#leaving-a-conflict-to-the-human). |
 | `runtime` | `"auto"` | Diagnostics override: `"auto"`, `"stable"`, or `"v2"`. Leave this on `"auto"` in normal use. |
 | `debug` | `false` | Write the latest 100 privacy-minimized outcomes to a JSONL file. Use `true` for the default path or provide a file path. |
+| `usage` | `false` | Append each model attempt's token counts and cost to an uncapped JSONL ledger. Use `true` for the default path or provide a file path. See [Usage Ledger](#usage-ledger). |
 | `instructions` | `false` | Give the reviewer the project's instruction files. `true` finds the same files OpenCode loads for the session; a list names files explicitly, relative to the session directory or starting with `~/`. See [Project Instructions](#project-instructions). |
 | `instructionsMaxChars` | `64000` | Cap on the combined instruction text, from 1,000 to 500,000 characters. Over the cap, the middle is cut and the start and end are kept. |
 
@@ -172,6 +173,23 @@ No configuration tuple is required. To override the automatic session-model sele
 Keep the entries in `~/.config/opencode/opencode.json` and, on older V2 betas that use it, `~/.config/opencode/cli.json` synchronized. A fast, reliable model that follows JSON instructions works best; deep reasoning adds unnecessary latency for permission review. Restart OpenCode after changing either file.
 
 With `debug: true`, diagnostics are written to `$XDG_STATE_HOME/opencode/auto-permissions/decisions.jsonl` (normally `~/.local/state/opencode/auto-permissions/decisions.jsonl`). Records include action type, timing, verdict, reason, reply result, and failure category. Commands, paths, tool inputs, and conversation text are not logged.
+
+### Usage Ledger
+
+Reviewer sessions are deleted after each review, so their token use appears nowhere in OpenCode's own history. With `usage: true`, each model attempt that returned at least one turn appends one line to `$XDG_STATE_HOME/opencode/auto-permissions/usage.jsonl` (normally `~/.local/state/opencode/auto-permissions/usage.jsonl`). The plugin never truncates or rotates this file.
+
+```json
+{"ts":"2026-10-31T15:38:05.986Z","requestID":"per_…","sessionID":"ses_…","providerID":"deepseek","modelID":"deepseek-flash","attempt":1,"outcome":"decision","turns":2,"tokens":{"input":146,"output":44,"reasoning":224,"cache":{"read":1408,"write":0}},"cost":0.000186924}
+```
+
+- `sessionID` is the root coding session the request came from, not the deleted reviewer session.
+- `attempt` is 2 for a fallback to the session's own model after the configured reviewer model failed.
+- `outcome` is `decision`, `failure` (timeout, error, or invalid output), or `cancelled` (the request was answered elsewhere first).
+- `turns` counts the reviewer turns summed into the line. A model that rejects structured output adds a turn for the text-JSON retry; that failed turn usually carries zero tokens.
+- `cost` is OpenCode's own figure and is omitted when OpenCode reported none.
+- A turn cut off by a timeout or cancellation returns no counts, so its partial use is missing from the line.
+
+Concurrent identical requests share one review and therefore one line. Like the diagnostics, the ledger holds no prompts, reasons, commands, or paths.
 
 Access to this bounded diagnostics file is deterministically allowed by the plugin so troubleshooting cannot be blocked by speculative sensitivity concerns. This exception applies only to Auto Permissions' own `decisions.jsonl` path.
 

@@ -1,4 +1,4 @@
-import type { ReviewModel, ReviewTokens, ReviewerClient } from "./types.ts"
+import type { ReviewModel, ReviewTokens, ReviewUsage, ReviewerClient } from "./types.ts"
 import { decisionSchema, REVIEWER_AGENT_ID } from "./agent.ts"
 import { mkdir } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -43,6 +43,7 @@ export class OpenCodeClientAdapter implements ReviewerClient {
     location?: { directory?: string; workspaceID?: string }
     signal: AbortSignal
     onTokens?(tokens: ReviewTokens): void
+    onUsage?(usage: ReviewUsage): void
     ask?: boolean
   }): Promise<unknown> {
     if (typeof this.client.permission?.request?.list === "function") return this.generateCurrent(input)
@@ -55,6 +56,9 @@ export class OpenCodeClientAdapter implements ReviewerClient {
     await mkdir(REVIEWER_DIRECTORY, { recursive: true })
     const location = { directory: REVIEWER_DIRECTORY }
     let sessionID: string | undefined
+    // Each turn's result, kept for its token and cost counts. The reviewer
+    // session is deleted below, and with it the only other record of them.
+    const turns: unknown[] = []
     const abortRemote = () => {
       if (!sessionID || typeof session.abort !== "function") return
       const abortInput = stable
@@ -108,6 +112,7 @@ export class OpenCodeClientAdapter implements ReviewerClient {
           }
       try {
         const result = unwrapData(await session.prompt(promptInput, { signal: input.signal }))
+        turns.push(result)
         const structured = assistantStructured(result)
         reportTokens(result, input.onTokens)
         return structured
@@ -128,12 +133,14 @@ export class OpenCodeClientAdapter implements ReviewerClient {
           ? { path: { id: sessionID }, query: location, body: fallbackBody }
           : { sessionID, ...location, ...fallbackBody }
         const result = unwrapData(await session.prompt(fallbackInput, { signal: input.signal }))
-        const parsed = JSON.parse(assistantText(result))
+        turns.push(result)
         reportTokens(result, input.onTokens)
-        return parsed
+        return JSON.parse(assistantText(result))
       }
     } finally {
       input.signal.removeEventListener("abort", abortRemote)
+      const usage = sumUsage(turns)
+      if (usage) input.onUsage?.(usage)
       if (sessionID && typeof session.delete === "function") {
         const deleteInput = stable
           ? { path: { id: sessionID }, query: location }
@@ -248,10 +255,37 @@ function reportTokens(value: unknown, onTokens: ((tokens: ReviewTokens) => void)
   if (!onTokens || !isRecord(value) || !isRecord(value.info)) return
   const tokens = value.info.tokens
   if (!isRecord(tokens) || !isRecord(tokens.cache)) return
-  const { input, output } = tokens
+  const { input, output, reasoning } = tokens
   const { read, write } = tokens.cache
   if (![input, output, read, write].every((count) => typeof count === "number")) return
-  onTokens({ input, output, cache: { read, write } })
+  onTokens({ input, output, ...(typeof reasoning === "number" ? { reasoning } : {}), cache: { read, write } })
+}
+
+// Listing the reviewer session's messages instead would also catch aborted
+// turns, but OpenCode 1.18 rejects that listing with a 400: it cannot decode
+// the json_schema format stored on the review's own user message.
+function sumUsage(messages: unknown[]): ReviewUsage | undefined {
+  const usage: ReviewUsage = { turns: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } }
+  let cost: number | undefined
+  for (const message of messages) {
+    const info = isRecord(message) && isRecord(message.info) ? message.info : message
+    if (!isRecord(info) || info.role !== "assistant" || !isRecord(info.tokens)) continue
+    const tokens = info.tokens
+    const cache = isRecord(tokens.cache) ? tokens.cache : {}
+    usage.turns++
+    usage.tokens.input += count(tokens.input)
+    usage.tokens.output += count(tokens.output)
+    usage.tokens.reasoning += count(tokens.reasoning)
+    usage.tokens.cache.read += count(cache.read)
+    usage.tokens.cache.write += count(cache.write)
+    if (typeof info.cost === "number" && Number.isFinite(info.cost)) cost = (cost ?? 0) + info.cost
+  }
+  if (usage.turns === 0) return undefined
+  return cost === undefined ? usage : { ...usage, cost }
+}
+
+function count(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0
 }
 
 function isStructuredOutputError(error: unknown): boolean {
