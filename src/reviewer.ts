@@ -293,7 +293,7 @@ function writeDecision(
   startedAt: number,
   decision: Decision,
   source: "policy" | "model" | "session",
-  replyResult?: "replied" | "not_found" | "manual",
+  replyResult?: "replied" | "replied_with_reason" | "not_found" | "manual",
   approvalScope?: "once" | "session",
 ): void {
   writeDiagnostic(config.diagnosticsPath, {

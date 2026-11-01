@@ -127,5 +127,6 @@ export interface ReviewerClient {
     reply: "once" | "always" | "reject"
     message?: string
     protocol: PermissionProtocol
-  }): Promise<"replied" | "not_found">
+  // "replied_with_reason" means the rejection carried the message to the agent.
+  }): Promise<"replied" | "replied_with_reason" | "not_found">
 }

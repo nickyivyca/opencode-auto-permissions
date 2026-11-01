@@ -34,7 +34,7 @@ export interface DiagnosticRecord {
   reasonCode?: string
   reason?: string
   shadow?: boolean
-  replyResult?: "replied" | "not_found" | "manual"
+  replyResult?: "replied" | "replied_with_reason" | "not_found" | "manual"
   delivery?: "steer" | "resume" | "resume_fallback" | "queue"
   failureCategory?: "timeout" | "cancelled" | "invalid_response" | "error"
   errorName?: string

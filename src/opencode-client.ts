@@ -156,7 +156,7 @@ export class OpenCodeClientAdapter implements ReviewerClient {
     reply: "once" | "always" | "reject"
     message?: string
     protocol: "stable" | "v2"
-  }): Promise<"replied" | "not_found"> {
+  }): Promise<"replied" | "replied_with_reason" | "not_found"> {
     try {
       if (typeof this.client.permission?.request?.list === "function") {
         await this.client.permission.reply({
@@ -176,6 +176,22 @@ export class OpenCodeClientAdapter implements ReviewerClient {
         } catch (error) {
           if (!isNotFound(error) || typeof this.client.permission?.reply !== "function") throw error
         }
+      }
+
+      // The 1.x client only generates the old session-scoped route, which takes
+      // no message, and OpenCode ends the agent's turn on a plain rejection. The
+      // newer route takes the message and turns it into feedback the agent can
+      // act on in the same turn. Any failure there falls back to the old route,
+      // so the rejection itself is always delivered.
+      const transport = this.client._client
+      if (input.reply === "reject" && input.message && typeof transport?.post === "function") {
+        const result = await Promise.resolve(transport.post({
+          url: "/permission/{requestID}/reply",
+          path: { requestID: input.requestID },
+          body: { reply: input.reply, message: input.message },
+          headers: { "Content-Type": "application/json" },
+        })).catch((error: unknown) => ({ error }))
+        if (!isRecord(result) || result.error === undefined) return "replied_with_reason"
       }
 
       const legacy = this.client.permission

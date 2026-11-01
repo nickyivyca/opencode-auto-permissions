@@ -83,7 +83,7 @@ describe("createStableRuntime", () => {
     await runtime.context.data.session.message.sync("ses_child")
 
     runtime.context.resumeAfterDenial?.("ses_child", "The user explicitly prohibited this action.")
-    await new Promise((resolve) => setTimeout(resolve, 150))
+    await new Promise((resolve) => setTimeout(resolve, 1_200))
 
     expect(injected.prompts).toEqual([
       {
@@ -100,6 +100,24 @@ describe("createStableRuntime", () => {
         },
       },
     ])
+    runtime.dispose()
+  })
+
+  test("does not resume a session the human wrote to while it was busy", async () => {
+    const injected = client()
+    const messages = injected.session.messages
+    let syncs = 0
+    injected.session.messages = async (input: { path: { id: string } }) => {
+      const result = await messages(input)
+      if (++syncs < 2) return result
+      return { data: [...result.data, { info: { id: "msg_human_later", role: "user" }, parts: [] }] }
+    }
+    const runtime = createStableRuntime(injected, { model: "cloudflare-workers-ai/@cf/deepseek-ai/deepseek-v4-flash-0731" }, "/repo")
+
+    runtime.context.resumeAfterDenial?.("ses_child", "The user explicitly prohibited this action.")
+    await new Promise((resolve) => setTimeout(resolve, 1_200))
+
+    expect(injected.prompts).toEqual([])
     runtime.dispose()
   })
 

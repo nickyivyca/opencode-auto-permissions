@@ -1,5 +1,12 @@
 import { AUTO_PERMISSIONS_MESSAGE_PREFIX, normalizeAskedEvent, normalizeRepliedEvent } from "./context.ts"
 import type { PermissionRequest, RuntimeContext } from "./types.ts"
+import { parseConfig } from "./config.ts"
+import { writeDiagnostic } from "./diagnostics.ts"
+
+// How long a denial's continuation waits for the session to go idle. Parallel
+// tool calls keep it busy until they finish, which can take minutes.
+const RESUME_WAIT_MS = 10 * 60_000
+const RESUME_POLL_MS = 500
 
 type Handler = (event: unknown) => void
 
@@ -93,23 +100,40 @@ export function createStableRuntime(
       if (typeof client.session?.promptAsync !== "function") return
       const controller = new AbortController()
       resumeControllers.add(controller)
-      void waitForIdle(client, sessionID, directory, controller.signal)
-        .then((idle) => {
-          if (!idle || controller.signal.aborted) return
-          const routing = latestUserRouting(messages.get(sessionID) ?? [])
-          return client.session.promptAsync({
-            path: { id: sessionID },
-            query: { directory },
-            body: {
-              ...routing,
-              parts: [{
-                type: "text",
-                text: `${AUTO_PERMISSIONS_MESSAGE_PREFIX} ${reason} Do not retry the exact blocked action. Continue the task using a safer alternative when possible; ask the user only if no useful safe path remains.`,
-              }],
-            },
-          })
+      const record = (event: "resumed" | "resume_failed", reasonCode?: string) => {
+        writeDiagnostic(diagnosticsPath(options), {
+          timestamp: new Date().toISOString(),
+          event,
+          sessionID,
+          delivery: "resume",
+          ...(reasonCode ? { reasonCode } : {}),
         })
-        .catch(() => undefined)
+      }
+      void (async () => {
+        await syncMessages(sessionID).catch(() => undefined)
+        const before = latestUserMessageID(messages.get(sessionID) ?? [])
+        const idle = await waitForIdle(client, sessionID, directory, controller.signal)
+        if (controller.signal.aborted) return
+        if (!idle) return record("resume_failed", "session_never_idle")
+        // A human who wrote in the meantime has taken over; a continuation
+        // now would answer a turn that has already moved on.
+        await syncMessages(sessionID).catch(() => undefined)
+        if (latestUserMessageID(messages.get(sessionID) ?? []) !== before) return record("resume_failed", "human_took_over")
+        const routing = latestUserRouting(messages.get(sessionID) ?? [])
+        unwrap(await client.session.promptAsync({
+          path: { id: sessionID },
+          query: { directory },
+          body: {
+            ...routing,
+            parts: [{
+              type: "text",
+              text: `${AUTO_PERMISSIONS_MESSAGE_PREFIX} ${reason} Do not retry the exact blocked action. Continue the task using a safer alternative when possible; ask the user only if no useful safe path remains.`,
+            }],
+          },
+        }))
+        record("resumed")
+      })()
+        .catch(() => record("resume_failed", "prompt_failed"))
         .finally(() => resumeControllers.delete(controller))
     },
   }
@@ -177,12 +201,28 @@ async function waitForIdle(client: any, sessionID: string, directory: string, si
     await delay(250, signal)
     return !signal.aborted
   }
-  for (let attempt = 0; attempt < 50 && !signal.aborted; attempt++) {
+  const deadline = Date.now() + RESUME_WAIT_MS
+  while (!signal.aborted && Date.now() < deadline) {
     const statuses = unwrap(await client.session.status({ query: { directory } }))
     if (!isRecord(statuses) || !isRecord(statuses[sessionID]) || statuses[sessionID].type === "idle") return true
-    await delay(100, signal)
+    await delay(RESUME_POLL_MS, signal)
   }
   return false
+}
+
+function latestUserMessageID(messages: unknown[]): string | undefined {
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const info = (messages[index] as { info?: { id?: unknown; role?: unknown } } | undefined)?.info
+    if (info?.role === "user" && typeof info.id === "string") return info.id
+  }
+}
+
+function diagnosticsPath(options: Readonly<Record<string, unknown>>): string | undefined {
+  try {
+    return parseConfig(options).diagnosticsPath
+  } catch {
+    return undefined
+  }
 }
 
 function delay(milliseconds: number, signal: AbortSignal): Promise<void> {

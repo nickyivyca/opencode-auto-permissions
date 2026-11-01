@@ -651,6 +651,53 @@ describe("OpenCodeClientAdapter", () => {
     expect(calls).toEqual(["stable"])
   })
 
+  test("sends a stable rejection's reason through the permission reply route", async () => {
+    const posts: any[] = []
+    const legacy: unknown[] = []
+    const client = new OpenCodeClientAdapter({
+      _client: { post: async (input: unknown) => (posts.push(input), { data: true }) },
+      postSessionIdPermissionsPermissionId: async (input: unknown) => legacy.push(input),
+    })
+
+    await expect(client.reply({
+      sessionID: "ses_1", requestID: "per_1", reply: "reject", message: "Blocked: use a branch.", protocol: "stable",
+    })).resolves.toBe("replied_with_reason")
+
+    expect(posts).toEqual([{
+      url: "/permission/{requestID}/reply",
+      path: { requestID: "per_1" },
+      body: { reply: "reject", message: "Blocked: use a branch." },
+      headers: { "Content-Type": "application/json" },
+    }])
+    expect(legacy).toEqual([])
+  })
+
+  test("falls back to the session-scoped route when the reply route is missing", async () => {
+    const legacy: unknown[] = []
+    const client = new OpenCodeClientAdapter({
+      _client: { post: async () => ({ error: { name: "NotFoundError" }, response: { status: 404 } }) },
+      postSessionIdPermissionsPermissionId: async (input: unknown) => (legacy.push(input), { data: true }),
+    })
+
+    await expect(client.reply({
+      sessionID: "ses_1", requestID: "per_1", reply: "reject", message: "Blocked.", protocol: "stable",
+    })).resolves.toBe("replied")
+    expect(legacy).toEqual([{ path: { id: "ses_1", permissionID: "per_1" }, body: { response: "reject" } }])
+  })
+
+  test("keeps approvals on the session-scoped route", async () => {
+    const posts: unknown[] = []
+    const legacy: unknown[] = []
+    const client = new OpenCodeClientAdapter({
+      _client: { post: async (input: unknown) => posts.push(input) },
+      postSessionIdPermissionsPermissionId: async (input: unknown) => legacy.push(input),
+    })
+
+    await client.reply({ sessionID: "ses_1", requestID: "per_1", reply: "once", protocol: "stable" })
+    expect(posts).toEqual([])
+    expect(legacy).toHaveLength(1)
+  })
+
   test("sends session approval through the generated stable endpoint", async () => {
     const replies: unknown[] = []
     const client = new OpenCodeClientAdapter({

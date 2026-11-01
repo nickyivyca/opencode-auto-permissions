@@ -742,6 +742,17 @@ Example: {"decision":"allow","reasonCode":"authorized_action","reason":"The acti
             throw error;
         }
       }
+      const transport = this.client._client;
+      if (input.reply === "reject" && input.message && typeof transport?.post === "function") {
+        const result2 = await Promise.resolve(transport.post({
+          url: "/permission/{requestID}/reply",
+          path: { requestID: input.requestID },
+          body: { reply: input.reply, message: input.message },
+          headers: { "Content-Type": "application/json" }
+        })).catch((error) => ({ error }));
+        if (!isRecord2(result2) || result2.error === undefined)
+          return "replied_with_reason";
+      }
       const legacy = this.client.permission;
       const result = typeof legacy?.reply === "function" ? await legacy.reply(input) : typeof this.client.postSessionIdPermissionsPermissionId === "function" ? await this.client.postSessionIdPermissionsPermissionId({
         path: { id: input.sessionID, permissionID: input.requestID },
@@ -1543,6 +1554,8 @@ function sameModelId(left, right) {
 }
 
 // src/stable.ts
+var RESUME_WAIT_MS = 10 * 60000;
+var RESUME_POLL_MS = 500;
 function createStableRuntime(injectedClient, options, directory2, worktree) {
   const client = compatibleClient(injectedClient);
   const listeners = new Map;
@@ -1632,11 +1645,32 @@ function createStableRuntime(injectedClient, options, directory2, worktree) {
         return;
       const controller = new AbortController;
       resumeControllers.add(controller);
-      waitForIdle(client, sessionID, directory2, controller.signal).then((idle) => {
-        if (!idle || controller.signal.aborted)
+      const record = (event, reasonCode) => {
+        writeDiagnostic(diagnosticsPath(options), {
+          timestamp: new Date().toISOString(),
+          event,
+          sessionID,
+          delivery: "resume",
+          ...reasonCode ? { reasonCode } : {}
+        });
+      };
+      (async () => {
+        await syncMessages(sessionID).catch(() => {
           return;
+        });
+        const before = latestUserMessageID(messages.get(sessionID) ?? []);
+        const idle = await waitForIdle(client, sessionID, directory2, controller.signal);
+        if (controller.signal.aborted)
+          return;
+        if (!idle)
+          return record("resume_failed", "session_never_idle");
+        await syncMessages(sessionID).catch(() => {
+          return;
+        });
+        if (latestUserMessageID(messages.get(sessionID) ?? []) !== before)
+          return record("resume_failed", "human_took_over");
         const routing = latestUserRouting(messages.get(sessionID) ?? []);
-        return client.session.promptAsync({
+        unwrap(await client.session.promptAsync({
           path: { id: sessionID },
           query: { directory: directory2 },
           body: {
@@ -1646,10 +1680,9 @@ function createStableRuntime(injectedClient, options, directory2, worktree) {
               text: `${AUTO_PERMISSIONS_MESSAGE_PREFIX} ${reason} Do not retry the exact blocked action. Continue the task using a safer alternative when possible; ask the user only if no useful safe path remains.`
             }]
           }
-        });
-      }).catch(() => {
-        return;
-      }).finally(() => resumeControllers.delete(controller));
+        }));
+        record("resumed");
+      })().catch(() => record("resume_failed", "prompt_failed")).finally(() => resumeControllers.delete(controller));
     }
   };
   return {
@@ -1711,13 +1744,28 @@ async function waitForIdle(client, sessionID, directory2, signal) {
     await delay(250, signal);
     return !signal.aborted;
   }
-  for (let attempt = 0;attempt < 50 && !signal.aborted; attempt++) {
+  const deadline = Date.now() + RESUME_WAIT_MS;
+  while (!signal.aborted && Date.now() < deadline) {
     const statuses = unwrap(await client.session.status({ query: { directory: directory2 } }));
     if (!isRecord4(statuses) || !isRecord4(statuses[sessionID]) || statuses[sessionID].type === "idle")
       return true;
-    await delay(100, signal);
+    await delay(RESUME_POLL_MS, signal);
   }
   return false;
+}
+function latestUserMessageID(messages) {
+  for (let index = messages.length - 1;index >= 0; index--) {
+    const info = messages[index]?.info;
+    if (info?.role === "user" && typeof info.id === "string")
+      return info.id;
+  }
+}
+function diagnosticsPath(options) {
+  try {
+    return parseConfig(options).diagnosticsPath;
+  } catch {
+    return;
+  }
 }
 function delay(milliseconds, signal) {
   return new Promise((resolve2) => {

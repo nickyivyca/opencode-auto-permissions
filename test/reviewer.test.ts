@@ -446,6 +446,37 @@ describe("installReviewer", () => {
     dispose()
   })
 
+  test("skips the continuation message when the rejection already carried the reason", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "auto-permissions-reviewer-"))
+    const log = join(directory, "decisions.jsonl")
+    const app = harness({ model: "cloudflare-workers-ai/@cf/deepseek-ai/deepseek-v4-flash-0731", debug: log })
+    const reply = app.client.reply.bind(app.client)
+    app.client.reply = async (input) => {
+      await reply(input)
+      return "replied_with_reason"
+    }
+    app.requests.push(request("git push origin feature"))
+    const dispose = installReviewer(app.context, { client: app.client })
+    try {
+      app.emit("permission.v2.asked", app.requests[0])
+      await settle()
+
+      expect(app.replies[0]).toMatchObject({ reply: "reject", message: expect.stringContaining("safer alternative") })
+      expect(app.resumptions).toEqual([])
+      let decision: Record<string, unknown> | undefined
+      for (let attempt = 0; attempt < 50 && !decision; attempt++) {
+        await settle()
+        decision = (await readFile(log, "utf8").catch(() => ""))
+          .split("\n").filter(Boolean).map((line) => JSON.parse(line))
+          .find((record) => record.event === "decision")
+      }
+      expect(decision).toMatchObject({ decision: "deny", replyResult: "replied_with_reason" })
+    } finally {
+      dispose()
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
   test("resolves a deny verdict with helpful continuation", async () => {
     const app = harness()
     app.requests.push(request("git push origin feature"))
