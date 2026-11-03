@@ -149,7 +149,7 @@ The plugin tuple accepts these options:
 | `model` | Requesting session model | Optional dedicated reviewer model in `provider/model` form. |
 | `variant` | Selected model's default | Optional reviewer-only model variant. Use `"low"` when supported for faster decisions. |
 | `sessionApprovals` | `true` | Reuse guarded, pattern-specific approvals immediately for the current session. Set `false` for one-time approvals only. |
-| `timeoutMs` | `30000` | Per-model timeout from 100 to 30,000 milliseconds. A fallback gets its own budget, so two model attempts can take up to 60 seconds at the default (plus context/reply overhead). |
+| `timeoutMs` | `30000` | Per-model timeout from 100 to 300,000 milliseconds (5 minutes). A fallback gets its own budget, so two model attempts can take up to 60 seconds at the default, or 10 minutes at the maximum (plus context/reply overhead). |
 | `userMessageCount` | `8` | Recent user messages included in review context, from 1 to 20. |
 | `shadow` | `false` | Evaluate and record decisions without replying to permission requests. |
 | `ask` | `false` | Let the reviewer leave a conflict between a human request and an instruction-file rule to the human, through OpenCode's own prompt. See [Leaving a Conflict to the Human](#leaving-a-conflict-to-the-human). |

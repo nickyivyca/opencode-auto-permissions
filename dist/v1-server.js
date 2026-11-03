@@ -22747,6 +22747,7 @@ function writeUsage(path, record2) {
 
 // src/config.ts
 var DEFAULT_TIMEOUT_MS = 30000;
+var MAX_TIMEOUT_MS = 300000;
 var DEFAULT_USER_MESSAGE_COUNT = 8;
 var DEFAULT_INSTRUCTIONS_MAX_CHARS = 64000;
 function parseConfig(options2) {
@@ -22757,7 +22758,7 @@ function parseConfig(options2) {
     model,
     modelLabel: typeof modelValue === "string" ? modelValue : undefined,
     variant,
-    timeoutMs: boundedInteger(options2.timeoutMs, DEFAULT_TIMEOUT_MS, 100, 30000, "timeoutMs"),
+    timeoutMs: boundedInteger(options2.timeoutMs, DEFAULT_TIMEOUT_MS, 100, MAX_TIMEOUT_MS, "timeoutMs"),
     userMessageCount: boundedInteger(options2.userMessageCount, DEFAULT_USER_MESSAGE_COUNT, 1, 20, "userMessageCount"),
     shadow: options2.shadow === true,
     ask: parseAsk(options2.ask),
